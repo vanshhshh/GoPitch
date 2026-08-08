@@ -9,7 +9,7 @@
   "start": "node dist/app.js",
   "test": "vitest run",
   "typecheck": "tsc --noEmit"
-}
+},
   "keywords": [],
   "author": "",
   "license": "ISC",
