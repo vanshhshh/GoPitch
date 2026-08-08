@@ -92,21 +92,28 @@ function Hero() {
         custom={1}
         className="font-display text-4xl md:text-6xl leading-tight mb-6"
       >
-        Raise smarter.
-        <br />
-        Not just louder.
+        GoPitch
       </motion.h1>
       <motion.p
         variants={fadeUp}
         initial="hidden"
         animate="show"
         custom={2}
+        className="font-display text-2xl md:text-4xl leading-tight max-w-3xl mx-auto mb-6"
+      >
+        Fundraising software for pitch decks, investor matching, and Gmail outreach.
+      </motion.p>
+      <motion.p
+        variants={fadeUp}
+        initial="hidden"
+        animate="show"
+        custom={3}
         className="text-ink-soft text-lg max-w-xl mx-auto mb-10"
       >
-        Generate your deck, get matched with investors who actually fit your stage and thesis, and
-        send outreach that reads like you wrote it — because you did.
+        GoPitch helps founders create a fundraising deck, find relevant investors by stage and thesis,
+        connect Gmail, and send personalized investor outreach from their own account.
       </motion.p>
-      <motion.div variants={fadeUp} initial="hidden" animate="show" custom={3} className="flex items-center justify-center gap-4">
+      <motion.div variants={fadeUp} initial="hidden" animate="show" custom={4} className="flex items-center justify-center gap-4">
         <Link href="/signup" className="btn-primary text-base px-6 py-3">
           Start your raise
         </Link>
@@ -119,7 +126,7 @@ function Hero() {
         variants={fadeUp}
         initial="hidden"
         animate="show"
-        custom={4}
+        custom={5}
         className="mt-16 card p-6 max-w-md mx-auto text-left"
       >
         <div className="flex items-center gap-3 mb-4">
