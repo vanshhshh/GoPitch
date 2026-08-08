@@ -10,25 +10,25 @@ export class ApiError extends Error {
 
 function getToken(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem("pitchos_token");
+  return localStorage.getItem("gopitch_token");
 }
 
 export function setToken(token: string) {
-  localStorage.setItem("pitchos_token", token);
+  localStorage.setItem("gopitch_token", token);
 }
 
 export function clearToken() {
-  localStorage.removeItem("pitchos_token");
+  localStorage.removeItem("gopitch_token");
 }
 
 export function getStoredUser(): { id: string; email: string; role: string } | null {
   if (typeof window === "undefined") return null;
-  const raw = localStorage.getItem("pitchos_user");
+  const raw = localStorage.getItem("gopitch_user");
   return raw ? JSON.parse(raw) : null;
 }
 
 export function setStoredUser(user: { id: string; email: string; role: string }) {
-  localStorage.setItem("pitchos_user", JSON.stringify(user));
+  localStorage.setItem("gopitch_user", JSON.stringify(user));
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {

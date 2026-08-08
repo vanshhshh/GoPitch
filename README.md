@@ -1,4 +1,4 @@
-# Pitch-OS — full-stack SaaS: deck, investor matching, outreach
+# GoPitch — full-stack SaaS: deck, investor matching, outreach
 
 A note on the `.env` files in this delivery: they're sanitized examples, not your real
 credentials. You pasted live secrets (Neon DB, Razorpay test keys, Google OAuth client

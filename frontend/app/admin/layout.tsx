@@ -35,7 +35,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     <div className="min-h-screen flex">
       <aside className="w-56 border-r border-line bg-white flex flex-col shrink-0">
         <Link href="/admin" className="font-display text-lg px-6 py-5 border-b border-line flex items-center gap-2">
-          Pitch-OS
+          GoPitch
           <span className="text-[10px] uppercase tracking-wide bg-signal-soft text-signal px-1.5 py-0.5 rounded">
             Admin
           </span>

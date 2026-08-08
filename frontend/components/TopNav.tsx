@@ -22,7 +22,7 @@ export function TopNav() {
     <nav className="border-b border-line bg-white/80 backdrop-blur sticky top-0 z-10">
       <div className="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
         <Link href={user?.role === "ADMIN" ? "/admin" : "/dashboard"} className="font-display text-lg tracking-tight">
-          Pitch-OS
+          GoPitch
         </Link>
         {user && (
           <div className="flex items-center gap-4 text-sm text-ink-soft">

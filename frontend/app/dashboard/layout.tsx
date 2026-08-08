@@ -40,7 +40,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <div className="min-h-screen flex">
       <aside className="w-56 border-r border-line bg-white flex flex-col shrink-0">
         <Link href="/dashboard" className="font-display text-lg px-6 py-5 border-b border-line">
-          Pitch-OS
+          GoPitch
         </Link>
         <nav className="flex-1 py-4">
           {NAV.map((item) => {

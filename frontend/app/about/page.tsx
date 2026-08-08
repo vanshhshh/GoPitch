@@ -6,10 +6,10 @@ export default function AboutPage() {
     <div className="min-h-screen">
       <MarketingNav />
       <main className="max-w-2xl mx-auto px-6 py-20">
-        <h1 className="font-display text-4xl mb-6">About Pitch-OS</h1>
+        <h1 className="font-display text-4xl mb-6">About GoPitch</h1>
         <div className="space-y-4 text-ink-soft leading-relaxed">
           <p>
-            Pitch-OS started from a simple observation: the manual work of raising — researching
+            GoPitch started from a simple observation: the manual work of raising — researching
             investors, checking thesis fit, personalizing outreach, tracking replies — is the same
             grind every founder repeats from scratch, alone.
           </p>

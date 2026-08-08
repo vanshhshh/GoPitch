@@ -102,7 +102,7 @@ billingRouter.post("/checkout", async (req, res) => {
     amount: amountPaise,
     currency: "INR",
     notes: { userId, tier },
-    receipt: `pitchos_${userId.slice(0, 8)}_${Date.now()}`,
+    receipt: `gopitch_${userId.slice(0, 8)}_${Date.now()}`,
   });
 
   await pool.query(

@@ -95,7 +95,7 @@ export async function sendViaSmtpFallback(email: OutboundEmail): Promise<Deliver
       auth: { user, pass },
     });
     const info = await transporter.sendMail({
-      from: `"Pitch-OS test relay" <${user}>`,
+      from: `"GoPitch test relay" <${user}>`,
       to: email.to,
       subject: email.subject,
       text: `${email.body}\n\n---\nSent from the local test relay. Connect Gmail OAuth for real founder sends.`,

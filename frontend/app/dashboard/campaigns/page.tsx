@@ -30,7 +30,7 @@ export default function CampaignsPage() {
   }, []);
 
   function connectGmail() {
-    const token = localStorage.getItem("pitchos_token");
+    const token = localStorage.getItem("gopitch_token");
     const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:4000";
     window.location.href = `${apiBase}/auth/google/init?token=${token}`;
   }

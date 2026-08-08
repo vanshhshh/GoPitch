@@ -1,4 +1,4 @@
-// Pitch-OS: Deck + VC Matching + Personalized Outreach Platform
+// GoPitch: Deck + VC Matching + Personalized Outreach Platform
 // Postgres via Prisma. Run `npx prisma migrate dev` after setting DATABASE_URL.
 
 generator client {

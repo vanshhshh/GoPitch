@@ -36,7 +36,7 @@ const FEATURES = [
 const FAQS = [
   {
     q: "Does this replace warm intros?",
-    a: "No. Warm intros still convert better than any cold outreach. Pitch-OS is for building a credible, scored pipeline beyond the handful of people you already know.",
+    a: "No. Warm intros still convert better than any cold outreach. GoPitch is for building a credible, scored pipeline beyond the handful of people you already know.",
   },
   {
     q: "Do you guarantee investor replies?",

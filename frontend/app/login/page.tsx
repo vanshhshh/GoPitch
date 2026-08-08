@@ -34,7 +34,7 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center px-6">
       <div className="w-full max-w-sm animate-fade-up">
-        <h1 className="font-display text-3xl mb-1">Pitch-OS</h1>
+        <h1 className="font-display text-3xl mb-1">GoPitch</h1>
         <p className="text-ink-soft text-sm mb-8">Sign in to continue your raise.</p>
 
         <form onSubmit={handleSubmit} className="space-y-4">

@@ -3,11 +3,11 @@ import { Toaster } from "react-hot-toast";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Pitch-OS — Deck, matched investors, and outreach in one flow",
+  title: "GoPitch — Deck, matched investors, and outreach in one flow",
   description:
     "Generate your pitch deck, get matched with the right investors, and send personalized outreach — all from one platform built for founders raising a round.",
   openGraph: {
-    title: "Pitch-OS",
+    title: "GoPitch",
     description: "Deck, matched investors, and outreach for founders raising a round.",
     type: "website",
   },

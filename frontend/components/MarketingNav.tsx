@@ -23,7 +23,7 @@ export function MarketingNav() {
     >
       <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
         <Link href="/" className="font-display text-xl tracking-tight">
-          Pitch-OS
+          GoPitch
         </Link>
 
         <div className="hidden md:flex items-center gap-8 text-sm">

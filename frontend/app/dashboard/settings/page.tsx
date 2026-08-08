@@ -65,9 +65,9 @@ function SettingsContent() {
         if (gmailConnected) {
           if (p.gmailConnected) {
             toast.success("Gmail connected.");
-            const pendingCompanyId = localStorage.getItem("pitchos_pending_company_after_gmail");
+            const pendingCompanyId = localStorage.getItem("gopitch_pending_company_after_gmail");
             if (pendingCompanyId) {
-              localStorage.removeItem("pitchos_pending_company_after_gmail");
+              localStorage.removeItem("gopitch_pending_company_after_gmail");
               try {
                 await api.get<Company>(`/api/companies/${pendingCompanyId}`);
                 router.replace(`/company/${pendingCompanyId}?gmail_connected=true`);
@@ -109,7 +109,7 @@ function SettingsContent() {
   }
 
   function connectGmail() {
-    const token = localStorage.getItem("pitchos_token");
+    const token = localStorage.getItem("gopitch_token");
     const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:4000";
     window.location.href = `${apiBase}/auth/google/init?token=${token}`;
   }

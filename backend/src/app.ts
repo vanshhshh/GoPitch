@@ -59,5 +59,5 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 
 if (require.main === module) {
   const port = Number(process.env.PORT) || 4000;
-  app.listen(port, () => console.log(`Pitch-OS API listening on :${port}`));
+  app.listen(port, () => console.log(`GoPitch API listening on :${port}`));
 }

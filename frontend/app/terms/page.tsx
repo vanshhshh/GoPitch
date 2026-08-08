@@ -13,7 +13,7 @@ export default function TermsPage() {
           <section>
             <h2 className="font-display text-lg text-ink mb-2">No guarantee of outcomes</h2>
             <p>
-              Pitch-OS provides deck generation, investor matching, and outreach tooling. We do
+              GoPitch provides deck generation, investor matching, and outreach tooling. We do
               not guarantee investor replies, meetings, or funding outcomes. Matching scores
               reflect available data and are not investment advice or a representation of any
               investor's actual intent.

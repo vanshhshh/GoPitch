@@ -72,9 +72,9 @@ export default function OnboardingPage() {
   }
 
   function connectGmail() {
-    const token = localStorage.getItem("pitchos_token");
+    const token = localStorage.getItem("gopitch_token");
     const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:4000";
-    if (companyId) localStorage.setItem("pitchos_pending_company_after_gmail", companyId);
+    if (companyId) localStorage.setItem("gopitch_pending_company_after_gmail", companyId);
     window.location.href = `${apiBase}/auth/google/init?token=${token}`;
   }
 
@@ -304,7 +304,7 @@ function DeckStep({
     setUploading(true);
     setError(null);
     try {
-      const token = localStorage.getItem("pitchos_token");
+      const token = localStorage.getItem("gopitch_token");
       const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:4000";
       const formData = new FormData();
       formData.append("deck", file);

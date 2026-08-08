@@ -30,7 +30,7 @@ export function MarketingFooter() {
     <footer className="border-t border-line bg-white">
       <div className="max-w-6xl mx-auto px-6 py-12 grid grid-cols-2 md:grid-cols-4 gap-8">
         <div className="col-span-2 md:col-span-1">
-          <p className="font-display text-lg mb-2">Pitch-OS</p>
+          <p className="font-display text-lg mb-2">GoPitch</p>
           <p className="text-sm text-ink-soft">Deck, matched investors, and outreach — one flow.</p>
         </div>
         {COLUMNS.map((col) => (
@@ -48,7 +48,7 @@ export function MarketingFooter() {
       </div>
       <div className="border-t border-line-soft">
         <div className="max-w-6xl mx-auto px-6 py-4 text-xs text-ink-soft">
-          © {new Date().getFullYear()} Pitch-OS. All rights reserved.
+          © {new Date().getFullYear()} GoPitch. All rights reserved.
         </div>
       </div>
     </footer>

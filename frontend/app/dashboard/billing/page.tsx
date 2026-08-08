@@ -76,7 +76,7 @@ export default function BillingPage() {
         key: res.keyId,
         amount: res.amountPaise,
         currency: "INR",
-        name: "Pitch-OS",
+        name: "GoPitch",
         description: `${tier.name} plan`,
         order_id: res.orderId,
         theme: { color: "#1F6F5C" },

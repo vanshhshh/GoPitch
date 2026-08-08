@@ -1,4 +1,4 @@
--- Pitch-OS schema. Mirrors prisma/schema.prisma exactly (kept as the documented data
+-- GoPitch schema. Mirrors prisma/schema.prisma exactly (kept as the documented data
 -- model). This file is what actually runs, via node-postgres, because Prisma's engine
 -- binary download is blocked in this sandbox's network policy (binaries.prisma.sh isn't
 -- on the allowlist). On your VPS, where full network access exists, you can switch to
