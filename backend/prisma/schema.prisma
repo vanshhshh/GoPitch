@@ -1,0 +1,209 @@
+// Pitch-OS: Deck + VC Matching + Personalized Outreach Platform
+// Postgres via Prisma. Run `npx prisma migrate dev` after setting DATABASE_URL.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Core identity ----------
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String?
+  role          UserRole  @default(FOUNDER)
+  createdAt     DateTime  @default(now())
+
+  // Google OAuth for sending from their own Gmail (never our infra -> never our reputation at risk)
+  googleAccessToken   String?
+  googleRefreshToken  String?
+  googleTokenExpiry   DateTime?
+  gmailConnectedAt    DateTime?
+
+  // Sending health — the whole safety model hinges on these two fields
+  sendReputationScore Float     @default(1.0) // 0-1, drops on bounces/spam complaints, gates daily cap
+  accountAgeDays      Int       @default(0)   // drives warm-up ramp (see RateLimiter)
+  complaintReportedAt DateTime? // any spam complaint hard-stops sending until admin clears it
+
+  companies     Company[]
+  subscription  Subscription?
+  campaigns     Campaign[]
+  emailSends    EmailSend[]
+}
+
+// ---------- Founder input / product profile ----------
+
+model Company {
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id])
+
+  name              String
+  oneLiner          String
+  problem           String   @db.Text
+  solution          String   @db.Text
+  stage             Stage
+  sector            String[]  // e.g. ["fintech", "payments"]
+  geography         String[]  // e.g. ["India", "SEA"]
+  askAmountUsd      Int
+  traction          String?  @db.Text
+  founderBackground String?  @db.Text
+  screenshotUrls    String[]
+  extractedKeywords String[]  // LLM-derived thesis-matching keywords, computed once at deck creation
+
+  decks             Deck[]
+  campaigns         Campaign[]
+  createdAt         DateTime @default(now())
+}
+
+enum UserRole {
+  FOUNDER
+  ADMIN
+}
+
+enum Stage {
+  IDEA
+  PRE_SEED
+  SEED
+  SERIES_A
+  SERIES_B_PLUS
+}
+
+model Deck {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id])
+  version     Int      @default(1)
+  sectionsJson Json    // structured deck content: problem, solution, market, traction, ask, team...
+  pdfUrl      String?
+  createdAt   DateTime @default(now())
+}
+
+// ---------- Investor database (seeded from Vansh's existing contact list, grows over time) ----------
+
+model Investor {
+  id                String   @id @default(cuid())
+  name              String
+  firm              String
+  email             String   @unique
+  title             String?
+
+  stageFocus        Stage[]
+  sectorFocus       String[]           // thesis tags, e.g. ["fintech","climate","B2B SaaS"]
+  geoFocus          String[]
+  checkSizeMinUsd   Int?
+  checkSizeMaxUsd   Int?
+  thesisKeywords    String[]           // free-text thesis terms for matching
+  portfolioCompanies String[]
+
+  lastKnownActiveAt DateTime?          // recency signal — dead contacts hurt deliverability
+  sourceVerifiedAt  DateTime           @default(now()) // when we last confirmed this email is live
+  isVerified        Boolean            @default(false) // has passed a bounce/verification check
+
+  investorWarmth    InvestorWarmth[]
+  emailSends        EmailSend[]
+  createdAt         DateTime @default(now())
+}
+
+// Per-user warmth: "this VC already replied positively to a past campaign" is gold and must
+// outrank generic thesis-fit scoring. Distinct from Investor because warmth is relationship-specific.
+model InvestorWarmth {
+  id          String   @id @default(cuid())
+  investorId  String
+  investor    Investor @relation(fields: [investorId], references: [id])
+  userId      String
+  status      WarmthStatus
+  note        String?
+  updatedAt   DateTime @updatedAt
+
+  @@unique([investorId, userId])
+}
+
+enum WarmthStatus {
+  COLD
+  REPLIED_INTERESTED
+  REPLIED_PASS
+  REPLIED_NEEDS_INFO
+  MEETING_BOOKED
+}
+
+// ---------- Campaigns & sending ----------
+
+model Campaign {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id])
+  tier        PlanTier
+  matchedInvestorIds String[] // snapshot of scored + selected investor IDs for this campaign
+  status      CampaignStatus @default(ACTIVE)
+  createdAt   DateTime @default(now())
+
+  emailSends  EmailSend[]
+}
+
+enum CampaignStatus {
+  ACTIVE
+  PAUSED
+  COMPLETED
+}
+
+model EmailSend {
+  id           String   @id @default(cuid())
+  campaignId   String
+  campaign     Campaign @relation(fields: [campaignId], references: [id])
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  investorId   String
+  investor     Investor @relation(fields: [investorId], references: [id])
+
+  subject      String
+  bodyText     String   @db.Text
+  matchScore   Float
+  status       SendStatus @default(QUEUED)
+  scheduledFor DateTime
+  sentAt       DateTime?
+  bouncedAt    DateTime?
+  gmailMessageId String?
+
+  createdAt    DateTime @default(now())
+}
+
+enum SendStatus {
+  QUEUED
+  SENT
+  BOUNCED
+  FAILED
+  SKIPPED_CAP_REACHED
+}
+
+// ---------- Billing ----------
+
+model Subscription {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id])
+  tier        PlanTier
+  razorpaySubscriptionId String?
+  status      SubStatus @default(ACTIVE)
+  currentPeriodEnd DateTime?
+  createdAt   DateTime @default(now())
+}
+
+enum PlanTier {
+  STARTER        // one-time: deck + 30 curated matches
+  GROWTH         // monthly: active campaign mgmt + expanding list
+  EXPANSION_ADDON // one-time top-up: +50 more scored investors unlocked
+}
+
+enum SubStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+}

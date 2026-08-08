@@ -1,0 +1,48 @@
+@import url("https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap");
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-paper text-ink font-sans antialiased;
+  }
+  h1, h2, h3 {
+    @apply font-display;
+  }
+  /* Visible keyboard focus everywhere — accessibility floor, not optional polish */
+  :focus-visible {
+    outline: 2px solid theme("colors.verified");
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white border border-line rounded-lg shadow-subtle;
+  }
+  .btn-primary {
+    @apply bg-verified text-white px-4 py-2 rounded font-medium text-sm
+           hover:bg-[#195A4A] transition-colors duration-150
+           disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-secondary {
+    @apply bg-white text-ink border border-line px-4 py-2 rounded font-medium text-sm
+           hover:border-ink-soft transition-colors duration-150
+           disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .input-field {
+    @apply w-full border border-line rounded px-3 py-2 text-sm bg-white
+           focus:border-verified transition-colors duration-150;
+  }
+  .label {
+    @apply text-xs font-medium text-ink-soft uppercase tracking-wide;
+  }
+}
