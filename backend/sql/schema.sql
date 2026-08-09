@@ -20,6 +20,8 @@ CREATE TABLE users (
   google_token_expiry   TIMESTAMPTZ,
   gmail_connected_at    TIMESTAMPTZ,
   connected_gmail_address TEXT, -- may differ from login email
+  google_sub            TEXT UNIQUE,
+  google_email          TEXT,
 
   send_reputation_score REAL NOT NULL DEFAULT 1.0,
   account_age_days      INTEGER NOT NULL DEFAULT 0,

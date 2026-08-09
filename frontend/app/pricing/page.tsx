@@ -10,22 +10,39 @@ import { api } from "@/lib/api";
 interface Tier {
   id: string;
   name: string;
-  priceInr: number;
+  priceInr: number | null;
   billing: "one_time" | "monthly";
   includes: string[];
 }
 
 export default function PricingPage() {
   const [tiers, setTiers] = useState<Tier[] | null>(null);
+  const [showQuoteForm, setShowQuoteForm] = useState(false);
+  const [quoteSubmitted, setQuoteSubmitted] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [form, setForm] = useState({ name: "", phone: "", email: "", reason: "" });
 
   useEffect(() => {
     api.get<Tier[]>("/api/billing/pricing").then(setTiers).catch(() => setTiers([]));
   }, []);
 
+  async function handleQuoteSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSending(true);
+    try {
+      await api.post("/api/leads", { ...form, tier: "ENTERPRISE" });
+      setQuoteSubmitted(true);
+    } catch {
+      alert("Something went wrong. Please try again.");
+    } finally {
+      setSending(false);
+    }
+  }
+
   return (
     <div className="min-h-screen">
       <MarketingNav />
-      <main className="max-w-5xl mx-auto px-6 py-20">
+      <main className="max-w-7xl mx-auto px-6 py-20">
         <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="text-center mb-16">
           <h1 className="font-display text-4xl mb-4">Simple, usage-fair pricing</h1>
           <p className="text-ink-soft">No tier ever unlocks spraying every investor in the database. Paying more means better targeting, not more volume.</p>
@@ -34,7 +51,7 @@ export default function PricingPage() {
         {tiers === null ? (
           <p className="text-center text-ink-soft text-sm">Loading…</p>
         ) : (
-          <div className="grid md:grid-cols-3 gap-6">
+          <div className="grid md:grid-cols-4 gap-6">
             {tiers.map((tier, i) => (
               <motion.div
                 key={tier.id}
@@ -49,10 +66,12 @@ export default function PricingPage() {
                   </span>
                 )}
                 <h3 className="font-display text-xl mb-1">{tier.name}</h3>
-                <p className="font-mono text-2xl mb-1">
-                  ₹{tier.priceInr.toLocaleString()}
-                  <span className="text-sm text-ink-soft font-sans"> {tier.billing === "one_time" ? "one-time" : "/mo"}</span>
-                </p>
+                {tier.priceInr != null && (
+                  <p className="font-mono text-2xl mb-1">
+                    ₹{tier.priceInr.toLocaleString()}
+                    <span className="text-sm text-ink-soft font-sans"> {tier.billing === "one_time" ? "one-time" : "/mo"}</span>
+                  </p>
+                )}
                 <ul className="space-y-2 my-6 flex-1">
                   {tier.includes.map((item) => (
                     <li key={item} className="text-sm text-ink-soft flex gap-2">
@@ -61,14 +80,100 @@ export default function PricingPage() {
                     </li>
                   ))}
                 </ul>
-                <Link href="/signup" className={tier.id === "GROWTH" ? "btn-primary text-center" : "btn-secondary text-center"}>
-                  Get started
-                </Link>
+                {tier.id === "ENTERPRISE" ? (
+                  <button type="button" onClick={() => setShowQuoteForm(true)} className="btn-primary text-center">
+                    Get a quote
+                  </button>
+                ) : tier.priceInr == null ? (
+                  <Link href="/signup" className="btn-primary text-center">
+                    Try it for free
+                  </Link>
+                ) : (
+                  <Link href="/signup" className={tier.id === "GROWTH" ? "btn-primary text-center" : "btn-secondary text-center"}>
+                    Get started
+                  </Link>
+                )}
               </motion.div>
             ))}
           </div>
         )}
       </main>
+
+      {showQuoteForm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg p-8 max-w-md w-full">
+            {!quoteSubmitted ? (
+              <>
+                <h3 className="font-display text-2xl mb-2">Get a quote</h3>
+                <p className="text-ink-soft text-sm mb-6">Tell us about your raise and we&apos;ll get back to you within 24 hours.</p>
+                <form onSubmit={handleQuoteSubmit} className="space-y-4">
+                  <div>
+                    <label className="label block mb-1.5">Name</label>
+                    <input
+                      type="text"
+                      required
+                      value={form.name}
+                      onChange={(e) => setForm({ ...form, name: e.target.value })}
+                      className="input-field"
+                      placeholder="Full name"
+                    />
+                  </div>
+                  <div>
+                    <label className="label block mb-1.5">Phone</label>
+                    <input
+                      type="tel"
+                      required
+                      value={form.phone}
+                      onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                      className="input-field"
+                      placeholder="+91 98765 43210"
+                    />
+                  </div>
+                  <div>
+                    <label className="label block mb-1.5">Email</label>
+                    <input
+                      type="email"
+                      required
+                      value={form.email}
+                      onChange={(e) => setForm({ ...form, email: e.target.value })}
+                      className="input-field"
+                      placeholder="you@company.com"
+                    />
+                  </div>
+                  <div>
+                    <label className="label block mb-1.5">Why are you interested in Enterprise?</label>
+                    <textarea
+                      required
+                      rows={3}
+                      value={form.reason}
+                      onChange={(e) => setForm({ ...form, reason: e.target.value })}
+                      className="input-field"
+                      placeholder="Tell us about your raise, team size, and what you need..."
+                    />
+                  </div>
+                  <div className="flex gap-3 pt-2">
+                    <button type="submit" disabled={sending} className="btn-primary flex-1">
+                      {sending ? "Submitting…" : "Submit"}
+                    </button>
+                    <button type="button" onClick={() => { setShowQuoteForm(false); setQuoteSubmitted(false); }} className="btn-secondary flex-1">
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              </>
+            ) : (
+              <div className="text-center py-6">
+                <div className="text-verified text-4xl mb-4">✓</div>
+                <h3 className="font-display text-2xl mb-2">Thank you!</h3>
+                <p className="text-ink-soft mb-6">You would be contacted by the sales team shortly.</p>
+                <button type="button" onClick={() => { setShowQuoteForm(false); setQuoteSubmitted(false); }} className="btn-primary">
+                  Close
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       <MarketingFooter />
     </div>
   );

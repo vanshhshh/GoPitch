@@ -24,6 +24,8 @@ model User {
   googleRefreshToken  String?
   googleTokenExpiry   DateTime?
   gmailConnectedAt    DateTime?
+  googleSub           String?   @unique
+  googleEmail         String?
 
   // Sending health — the whole safety model hinges on these two fields
   sendReputationScore Float     @default(1.0) // 0-1, drops on bounces/spam complaints, gates daily cap

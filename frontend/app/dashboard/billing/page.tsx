@@ -7,7 +7,7 @@ import { api, ApiError } from "@/lib/api";
 interface Tier {
   id: string;
   name: string;
-  priceInr: number;
+  priceInr: number | null;
   billing: "one_time" | "monthly";
   includes: string[];
 }
@@ -112,16 +112,26 @@ export default function BillingPage() {
           {tiers.map((tier) => (
             <div key={tier.id} className="card p-5">
               <h3 className="font-display text-lg mb-1">{tier.name}</h3>
-              <p className="font-mono text-xl mb-3">
-                ₹{tier.priceInr.toLocaleString()}
-                <span className="text-xs text-ink-soft font-sans"> {tier.billing === "one_time" ? "one-time" : "/mo"}</span>
-              </p>
+              {tier.priceInr == null ? (
+                <p className="font-mono text-xl mb-3">Get a quote</p>
+              ) : (
+                <p className="font-mono text-xl mb-3">
+                  ₹{tier.priceInr.toLocaleString()}
+                  <span className="text-xs text-ink-soft font-sans"> {tier.billing === "one_time" ? "one-time" : "/mo"}</span>
+                </p>
+              )}
               <button
                 className="btn-primary w-full text-sm"
-                onClick={() => handleCheckout(tier)}
-                disabled={checkingOut === tier.id || subscription?.tier === tier.id}
+                onClick={() => tier.priceInr != null && handleCheckout(tier)}
+                disabled={checkingOut === tier.id || subscription?.tier === tier.id || tier.priceInr == null}
               >
-                {subscription?.tier === tier.id ? "Current plan" : checkingOut === tier.id ? "Starting…" : "Choose plan"}
+                {subscription?.tier === tier.id
+                  ? "Current plan"
+                  : tier.priceInr == null
+                  ? "Contact sales"
+                  : checkingOut === tier.id
+                  ? "Starting…"
+                  : "Choose plan"}
               </button>
             </div>
           ))}

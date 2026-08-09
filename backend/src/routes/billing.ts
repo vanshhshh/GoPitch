@@ -88,6 +88,14 @@ billingRouter.post("/checkout", async (req, res) => {
   const tierInfo = PRICING_TIERS[tier as PlanTierId];
   const razorpay = getRazorpayClient();
 
+  if (tierInfo.priceInr == null) {
+    return res.status(200).json({
+      mocked: true,
+      notice: "This tier uses custom pricing. Contact sales to get started.",
+      tier: tierInfo,
+    });
+  }
+
   if (!razorpay) {
     return res.status(200).json({
       mocked: true,
@@ -157,5 +165,9 @@ billingRouter.get("/margin-preview", (req, res) => {
   const tier = (req.query.tier as string) || "STARTER";
   const investorCount = Number(req.query.investorCount) || 30;
   if (!(tier in PRICING_TIERS)) return res.status(400).json({ error: "Invalid tier." });
+  const tierInfo = PRICING_TIERS[tier as keyof typeof PRICING_TIERS];
+  if (tierInfo.priceInr == null) {
+    return res.status(200).json({ error: "Custom pricing tier — margin preview not available." });
+  }
   res.json(computeMargin(tier as keyof typeof PRICING_TIERS, investorCount));
 });

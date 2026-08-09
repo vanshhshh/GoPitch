@@ -13,6 +13,7 @@ import { googleAuthRouter } from "./routes/googleAuth";
 import { emailTemplateRouter } from "./routes/emailTemplates";
 import { notificationRouter } from "./routes/notifications";
 import { profileRouter } from "./routes/profile";
+import { leadsRouter } from "./routes/leads";
 import { authRateLimiter, generalRateLimiter } from "./lib/rateLimiters";
 import { assertRefreshTokenEncryptionKeyConfigured } from "./lib/tokenEncryption";
 
@@ -48,6 +49,7 @@ app.use("/api/billing", billingRouter);
 app.use("/api/email-templates", emailTemplateRouter);
 app.use("/api/notifications", notificationRouter);
 app.use("/api/profile", profileRouter);
+app.use("/api/leads", leadsRouter);
 app.use(googleAuthRouter); // mounts /auth/google/init and /auth/google/callback directly (not under /api)
 
 // Centralized error handler — anything thrown in a route lands here instead of hanging

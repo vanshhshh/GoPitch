@@ -2,7 +2,7 @@ import { Router } from "express";
 import { google } from "googleapis";
 import { pool } from "../lib/db";
 import { encryptToken, decryptToken } from "../lib/tokenEncryption";
-import { verifyToken } from "../lib/auth";
+import { verifyToken, signToken } from "../lib/auth";
 
 export const googleAuthRouter = Router();
 
@@ -16,6 +16,17 @@ function getOAuthClient() {
 
 const GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
 const USERINFO_EMAIL_SCOPE = "https://www.googleapis.com/auth/userinfo.email";
+const GOOGLE_SIGNIN_SCOPES = ["openid", "email", "profile"];
+
+const oauthStateStore = new Map<string, number>();
+
+function cleanStateStore() {
+  const now = Date.now();
+  const maxAge = 10 * 60 * 1000; // 10 minutes
+  for (const [key, ts] of oauthStateStore.entries()) {
+    if (now - ts > maxAge) oauthStateStore.delete(key);
+  }
+}
 
 /**
  * Step 1: redirect the founder to Google's consent screen. The JWT is passed as
@@ -102,6 +113,89 @@ googleAuthRouter.get("/auth/google/callback", async (req, res) => {
   } catch (err) {
     console.error("Google OAuth callback failed:", err);
     res.redirect(`${frontendUrl}/dashboard?gmail_error=exchange_failed`);
+  }
+});
+
+/**
+ * Google Sign-In flow — separate from Gmail connection.
+ * Uses OpenID Connect scopes only. Never requests Gmail permissions.
+ */
+googleAuthRouter.get("/auth/google/signin", (req, res) => {
+  const client = getOAuthClient();
+  const state = Buffer.from(`${Date.now()}-${Math.random()}`).toString("base64url");
+  cleanStateStore();
+  oauthStateStore.set(state, Date.now());
+
+  const url = client.generateAuthUrl({
+    access_type: "online",
+    prompt: "select_account",
+    scope: GOOGLE_SIGNIN_SCOPES,
+    state,
+  });
+
+  res.redirect(url);
+});
+
+googleAuthRouter.get("/auth/google/signin/callback", async (req, res) => {
+  const code = req.query.code as string | undefined;
+  const state = req.query.state as string | undefined;
+  const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+
+  if (!code || !state) {
+    return res.redirect(`${frontendUrl}/login?google_error=access_denied`);
+  }
+
+  cleanStateStore();
+  if (!oauthStateStore.has(state)) {
+    return res.redirect(`${frontendUrl}/login?google_error=invalid_state`);
+  }
+  oauthStateStore.delete(state);
+
+  try {
+    const client = getOAuthClient();
+    const { tokens } = await client.getToken(code);
+    if (!tokens.id_token) {
+      return res.redirect(`${frontendUrl}/login?google_error=no_id_token`);
+    }
+
+    client.setCredentials(tokens);
+    const oauth2 = google.oauth2({ auth: client, version: "v2" });
+    const { data: profile } = await oauth2.userinfo.get();
+
+    const googleSub = profile.id;
+    const googleEmail = profile.email?.toLowerCase();
+    const googleName = profile.name;
+
+    if (!googleEmail || !googleSub) {
+      return res.redirect(`${frontendUrl}/login?google_error=missing_profile`);
+    }
+
+    let result = await pool.query("SELECT id, email, name, role FROM users WHERE google_sub = $1", [googleSub]);
+    let user = result.rows[0];
+
+    if (!user) {
+      result = await pool.query("SELECT id, email, name, role FROM users WHERE email = $1", [googleEmail]);
+      user = result.rows[0];
+
+      if (user) {
+        await pool.query(
+          `UPDATE users SET google_sub = $1, google_email = $2 WHERE id = $3`,
+          [googleSub, googleEmail, user.id]
+        );
+      } else {
+        result = await pool.query(
+          `INSERT INTO users (email, name, role, google_sub, google_email) VALUES ($1, $2, 'FOUNDER', $3, $4) RETURNING id, email, name, role`,
+          [googleEmail, googleName, googleSub, googleEmail]
+        );
+        user = result.rows[0];
+      }
+    }
+
+    const token = signToken({ userId: user.id, role: user.role });
+    res.redirect(`${frontendUrl}/login?google_token=${token}`);
+  } catch (err) {
+    console.error("Google Sign-In callback failed:", err);
+    res.redirect(`${frontendUrl}/login?google_error=auth_failed`);
   }
 });
 

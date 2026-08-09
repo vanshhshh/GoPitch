@@ -9,22 +9,34 @@
  * margin instead of guessing. Update MODEL_COST_PER_CALL_INR when you pick a real model/provider.
  */
 
-export type PlanTierId = "STARTER" | "GROWTH" | "ENTERPRISE";
+export type PlanTierId = "FREE" | "STARTER" | "GROWTH" | "ENTERPRISE";
 export type EntitlementTierId = "FREE" | PlanTierId;
 
 export interface PricingTier {
   id: PlanTierId;
   name: string;
-  priceInr: number;
+  priceInr: number | null;
   billing: "one_time" | "monthly";
   includes: string[];
 }
 
 export const PRICING_TIERS: Record<PlanTierId, PricingTier> = {
+  FREE: {
+    id: "FREE",
+    name: "Free",
+    priceInr: null,
+    billing: "one_time",
+    includes: [
+      "Upload your own deck (no AI-guided interview)",
+      "Preview up to 30 best-fit investors from the verified database",
+      "Send up to 30 personalized outreach emails",
+      "1 active campaign at a time",
+    ],
+  },
   STARTER: {
     id: "STARTER",
     name: "Starter",
-    priceInr: 1499,
+    priceInr: 5499,
     billing: "one_time",
     includes: [
       "AI-guided deck creation (interview + screenshots + founder history), or upload your own deck",
@@ -36,7 +48,7 @@ export const PRICING_TIERS: Record<PlanTierId, PricingTier> = {
   GROWTH: {
     id: "GROWTH",
     name: "Growth",
-    priceInr: 1999,
+    priceInr: 11999,
     billing: "monthly",
     includes: [
       "Everything in Starter",
@@ -49,7 +61,7 @@ export const PRICING_TIERS: Record<PlanTierId, PricingTier> = {
   ENTERPRISE: {
     id: "ENTERPRISE",
     name: "Enterprise",
-    priceInr: 9999,
+    priceInr: null,
     billing: "monthly",
     includes: [
       "Everything in Growth",
@@ -185,22 +197,22 @@ export function estimateCampaignCost(investorCount: number): CampaignCostBreakdo
 
 export interface MarginSummary {
   tier: PlanTierId;
-  priceInr: number;
+  priceInr: number | null;
   estimatedCostInr: number;
-  grossMarginInr: number;
-  grossMarginPercent: number;
+  grossMarginInr: number | null;
+  grossMarginPercent: number | null;
 }
 
 export function computeMargin(tier: PlanTierId, investorCount: number): MarginSummary {
   const price = PRICING_TIERS[tier].priceInr;
   const cost = estimateCampaignCost(investorCount).totalEstimatedCostInr;
-  const marginInr = price - cost;
+  const marginInr = price != null ? price - cost : null;
   return {
     tier,
     priceInr: price,
-    estimatedCostInr: cost,
-    grossMarginInr: round2(marginInr),
-    grossMarginPercent: round2((marginInr / price) * 100),
+    estimatedCostInr: round2(cost),
+    grossMarginInr: marginInr != null ? round2(marginInr) : null,
+    grossMarginPercent: marginInr != null ? round2((marginInr / (price as number)) * 100) : null,
   };
 }
 

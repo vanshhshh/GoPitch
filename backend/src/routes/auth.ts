@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { pool } from "../lib/db";
-import { hashPassword, verifyPassword, signToken } from "../lib/auth";
+import { hashPassword, verifyPassword, signToken, requireAuth } from "../lib/auth";
 
 export const authRouter = Router();
 
@@ -61,4 +61,14 @@ authRouter.post("/login", async (req, res) => {
 
   const token = signToken({ userId: user.id, role: user.role });
   res.json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role } });
+});
+
+authRouter.get("/me", requireAuth, async (req, res) => {
+  const result = await pool.query(
+    "SELECT id, email, name, role FROM users WHERE id = $1",
+    [req.auth!.userId]
+  );
+  const user = result.rows[0];
+  if (!user) return res.status(404).json({ error: "User not found." });
+  res.json({ id: user.id, email: user.email, name: user.name, role: user.role });
 });
