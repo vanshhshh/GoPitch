@@ -8,15 +8,25 @@ import { useEffect, useState } from "react";
 export function TopNav() {
   const router = useRouter();
   const [user, setUser] = useState<{ email: string; role: string } | null>(null);
+  const [checking, setChecking] = useState(true);
 
   useEffect(() => {
-    setUser(getStoredUser());
+    const stored = getStoredUser();
+    const token = localStorage.getItem("gopitch_token");
+    if (!stored || !token) {
+      setChecking(false);
+      return;
+    }
+    setUser(stored);
+    setChecking(false);
   }, []);
 
   function logout() {
     clearToken();
     router.push("/login");
   }
+
+  if (checking) return null;
 
   return (
     <nav className="border-b border-line bg-white/80 backdrop-blur sticky top-0 z-10">

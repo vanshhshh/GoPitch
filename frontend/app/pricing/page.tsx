@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
+import toast from "react-hot-toast";
 import Link from "next/link";
 import { MarketingNav } from "@/components/MarketingNav";
 import { MarketingFooter } from "@/components/MarketingFooter";
@@ -33,7 +34,7 @@ export default function PricingPage() {
       await api.post("/api/leads", { ...form, tier: "ENTERPRISE" });
       setQuoteSubmitted(true);
     } catch {
-      alert("Something went wrong. Please try again.");
+      toast.error("Something went wrong. Please try again.");
     } finally {
       setSending(false);
     }

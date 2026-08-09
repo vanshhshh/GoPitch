@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import toast from "react-hot-toast";
 import { api } from "@/lib/api";
 
 interface Notification {
@@ -16,7 +17,7 @@ export default function NotificationsPage() {
   const [notifications, setNotifications] = useState<Notification[] | null>(null);
 
   function refresh() {
-    api.get<Notification[]>("/api/notifications").then(setNotifications);
+    api.get<Notification[]>("/api/notifications").then(setNotifications).catch(() => toast.error("Couldn't load notifications."));
   }
 
   useEffect(refresh, []);

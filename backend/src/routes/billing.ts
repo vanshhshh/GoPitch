@@ -15,6 +15,14 @@ function getRazorpayClient(): Razorpay | null {
   });
 }
 
+async function ensureProcessedWebhookEvent(eventId: string): Promise<boolean> {
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS processed_webhook_events (event_id TEXT PRIMARY KEY, processed_at TIMESTAMPTZ NOT NULL DEFAULT now())`
+  );
+  const result = await pool.query("INSERT INTO processed_webhook_events (event_id) VALUES ($1) ON CONFLICT DO NOTHING", [eventId]);
+  return result.rowCount === 1;
+}
+
 /** Public — pricing page reads this, no auth required. */
 billingRouter.get("/pricing", (_req, res) => {
   res.json(Object.values(PRICING_TIERS));
@@ -37,36 +45,111 @@ billingRouter.post("/webhook", async (req, res) => {
   const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || "";
   const signature = req.headers["x-razorpay-signature"] as string | undefined;
   const rawBody = Buffer.isBuffer(req.body) ? req.body.toString("utf-8") : JSON.stringify(req.body ?? {});
+  const eventTimestamp = Number(req.headers["x-razorpay-event-timestamp"] || 0);
+
+  if (!signature || !webhookSecret) {
+    return res.status(400).json({ error: "Invalid signature." });
+  }
+
+  if (eventTimestamp && Math.abs(Date.now() - eventTimestamp) > 300000) {
+    return res.status(400).json({ error: "Stale event timestamp." });
+  }
 
   const isValid = verifyRazorpaySignature(rawBody, signature, webhookSecret);
   if (!isValid) {
-    console.warn("Rejected Razorpay webhook: invalid or missing signature.");
     return res.status(400).json({ error: "Invalid signature." });
   }
 
   const event = parseVerifiedWebhook(rawBody);
+  const eventId = `${event.event}_${event.payload?.payment?.entity?.id || event.payload?.subscription?.entity?.id || ""}`;
 
-  if (event.event === "payment.captured") {
-    const payment = event.payload.payment?.entity;
-    const userId = payment?.notes?.userId;
-    const tier = payment?.notes?.tier;
-    if (userId && tier) {
-      await pool.query(
-        `INSERT INTO subscriptions (user_id, tier, status, current_period_end)
-         VALUES ($1, $2, 'ACTIVE', CASE WHEN $2 = 'GROWTH' THEN now() + interval '30 days' ELSE NULL END)
-         ON CONFLICT (user_id) DO UPDATE SET tier = $2, status = 'ACTIVE'`,
-        [userId, tier]
-      );
-    }
-  } else if (event.event === "subscription.cancelled") {
-    const subscription = event.payload.subscription?.entity;
-    const userId = subscription?.notes?.userId;
-    if (userId) {
-      await pool.query("UPDATE subscriptions SET status = 'CANCELLED' WHERE user_id = $1", [userId]);
-    }
+  if (!(await ensureProcessedWebhookEvent(eventId))) {
+    return res.status(200).json({ received: true, duplicate: true });
   }
 
-  res.status(200).json({ received: true });
+  try {
+    if (event.event === "payment.captured") {
+      const payment = event.payload.payment?.entity;
+      const userId = payment?.notes?.userId;
+      const tier = payment?.notes?.tier;
+      const amount = payment?.amount;
+      const orderId = payment?.order_id;
+
+      if (!userId || !tier || !amount || !orderId) {
+        return res.status(400).json({ error: "Missing required payment fields." });
+      }
+
+      const tierInfo = PRICING_TIERS[tier as PlanTierId];
+      if (!tierInfo || tierInfo.priceInr == null) {
+        return res.status(400).json({ error: "Invalid or custom-pricing tier." });
+      }
+
+      const expectedPaise = tierInfo.priceInr * 100;
+      if (amount !== expectedPaise) {
+        return res.status(400).json({ error: "Amount mismatch." });
+      }
+
+      await pool.query(
+        `INSERT INTO invoices (user_id, razorpay_order_id, razorpay_payment_id, tier, amount_inr, status)
+         VALUES ($1, $2, $3, $4, $5, 'PAID')
+         ON CONFLICT (razorpay_order_id) DO UPDATE SET razorpay_payment_id = $3, status = 'PAID'`,
+        [userId, orderId, payment.id, tier, tierInfo.priceInr]
+      );
+
+      const periodEnd = tierInfo.billing === "monthly" || tier === "ENTERPRISE"
+        ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+        : null;
+
+      await pool.query(
+        `INSERT INTO subscriptions (user_id, tier, status, current_period_end, razorpay_subscription_id)
+         VALUES ($1, $2, 'ACTIVE', $3, $4)
+         ON CONFLICT (user_id) DO UPDATE SET tier = $2, status = 'ACTIVE', current_period_end = $3, razorpay_subscription_id = $4`,
+        [userId, tier, periodEnd, payment.id]
+      );
+    } else if (event.event === "subscription.cancelled") {
+      const subscription = event.payload.subscription?.entity;
+      const userId = subscription?.notes?.userId;
+      if (userId) {
+        await pool.query("UPDATE subscriptions SET status = 'CANCELLED' WHERE user_id = $1", [userId]);
+      }
+    } else if (event.event === "subscription.activated") {
+      const subscription = event.payload.subscription?.entity;
+      const userId = subscription?.notes?.userId;
+      const subscriptionId = subscription?.id;
+      if (userId && subscriptionId) {
+        await pool.query(
+          `UPDATE subscriptions SET status = 'ACTIVE', current_period_end = $1, razorpay_subscription_id = $2 WHERE user_id = $3`,
+          [new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), subscriptionId, userId]
+        );
+      }
+    } else if (event.event === "subscription.charged") {
+      const subscription = event.payload.subscription?.entity;
+      const userId = subscription?.notes?.userId;
+      if (userId) {
+        await pool.query(
+          `UPDATE subscriptions SET status = 'ACTIVE', current_period_end = $1 WHERE user_id = $2`,
+          [new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), userId]
+        );
+      }
+    } else if (event.event === "subscription.expired" || event.event === "subscription.completed") {
+      const subscription = event.payload.subscription?.entity;
+      const userId = subscription?.notes?.userId;
+      if (userId) {
+        await pool.query("UPDATE subscriptions SET status = 'CANCELLED' WHERE user_id = $1", [userId]);
+      }
+    } else if (event.event === "payment.failed") {
+      const payment = event.payload.payment?.entity;
+      const userId = payment?.notes?.userId;
+      if (userId) {
+        await pool.query("UPDATE subscriptions SET status = 'PAST_DUE' WHERE user_id = $1", [userId]);
+      }
+    }
+
+    res.status(200).json({ received: true });
+  } catch (err) {
+    console.error("Webhook processing error:", err);
+    res.status(500).json({ error: "Webhook processing failed." });
+  }
 });
 
 // ---------- Everything below requires a logged-in founder ----------
@@ -158,6 +241,25 @@ billingRouter.get("/subscription", async (req, res) => {
     status: sub.status,
     currentPeriodEnd: sub.current_period_end,
   });
+});
+
+billingRouter.post("/cancel", async (req, res) => {
+  const userId = req.auth!.userId;
+  const sub = (await pool.query("SELECT * FROM subscriptions WHERE user_id = $1", [userId])).rows[0];
+  if (!sub) return res.status(404).json({ error: "No active subscription." });
+  if (sub.status === "CANCELLED") return res.status(400).json({ error: "Subscription is already cancelled." });
+
+  const razorpay = getRazorpayClient();
+  if (razorpay && sub.razorpay_subscription_id) {
+    try {
+      await razorpay.subscriptions.cancel(sub.razorpay_subscription_id, true);
+    } catch (err) {
+      console.error("Razorpay subscription cancel failed:", err);
+    }
+  }
+
+  await pool.query("UPDATE subscriptions SET status = 'CANCELLED' WHERE user_id = $1", [userId]);
+  res.json({ ok: true });
 });
 
 /** Internal — lets admins/founders see the real margin math, matches pricingService tests. */

@@ -73,6 +73,10 @@ export default function OnboardingPage() {
 
   function connectGmail() {
     const token = localStorage.getItem("gopitch_token");
+    if (!token) {
+      router.push("/login");
+      return;
+    }
     const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:4000";
     if (companyId) localStorage.setItem("gopitch_pending_company_after_gmail", companyId);
     window.location.href = `${apiBase}/auth/google/init?token=${token}`;

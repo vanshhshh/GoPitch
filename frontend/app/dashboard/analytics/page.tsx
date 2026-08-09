@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import toast from "react-hot-toast";
 import { api } from "@/lib/api";
 
 interface Analytics {
@@ -13,7 +14,7 @@ export default function AnalyticsPage() {
   const [data, setData] = useState<Analytics | null>(null);
 
   useEffect(() => {
-    api.get<Analytics>("/api/sends/analytics").then(setData);
+    api.get<Analytics>("/api/sends/analytics").then(setData).catch(() => toast.error("Couldn't load analytics."));
   }, []);
 
   if (!data) {

@@ -5,6 +5,7 @@ import { evaluateSend, UserSendState, applyReputationEvent } from "../services/s
 import { deliverEmail } from "../lib/emailDelivery";
 import { classifyInboundMessage, extractBouncedRecipient } from "../lib/bounceClassifier";
 import { createNotification } from "./notifications";
+import { resolveEntitlementTier, PLAN_LIMITS, PlanTierId } from "../services/pricingService";
 
 export const sendRouter = Router();
 sendRouter.use(requireAuth);
@@ -77,6 +78,23 @@ sendRouter.post("/campaigns/:campaignId/dispatch", async (req, res) => {
     await pool.query("SELECT * FROM campaigns WHERE id = $1 AND user_id = $2", [req.params.campaignId, userId])
   ).rows[0];
   if (!campaign) return res.status(404).json({ error: "Campaign not found." });
+
+  const subscriptionRow = await pool.query("SELECT tier, status, current_period_end FROM subscriptions WHERE user_id = $1", [userId]);
+  const entitlementTier = resolveEntitlementTier(subscriptionRow.rows[0] || undefined);
+  const limits = PLAN_LIMITS[entitlementTier];
+
+  const totalSentResult = await pool.query(
+    "SELECT COUNT(*)::int AS count FROM email_sends WHERE user_id = $1 AND status = 'SENT'",
+    [userId]
+  );
+  const totalSent = totalSentResult.rows[0].count;
+  if (limits.investorEmails !== Number.MAX_SAFE_INTEGER && totalSent >= limits.investorEmails) {
+    return res.status(403).json({
+      error: `Your ${entitlementTier} plan allows ${limits.investorEmails} total emails.`,
+      entitlementTier,
+      investorLimit: limits.investorEmails,
+    });
+  }
 
   const userRow = (await pool.query("SELECT * FROM users WHERE id = $1", [userId])).rows[0];
 

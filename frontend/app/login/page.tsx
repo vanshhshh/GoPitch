@@ -21,7 +21,7 @@ function GoogleHandler({ onError }: { onError: (msg: string) => void }) {
           setStoredUser(user);
           router.push(user.role === "ADMIN" ? "/admin" : "/dashboard");
         })
-        .catch(() => router.push("/onboarding"));
+        .catch(() => router.push("/login"));
     } else if (googleError) {
       const messages: Record<string, string> = {
         access_denied: "Google sign-in was cancelled.",

@@ -21,12 +21,12 @@ export default function CampaignsPage() {
   const [gmailConnected, setGmailConnected] = useState<boolean | null>(null);
 
   function refresh() {
-    api.get<Campaign[]>("/api/campaigns").then(setCampaigns);
+    api.get<Campaign[]>("/api/campaigns").then(setCampaigns).catch(() => toast.error("Couldn't load campaigns."));
   }
 
   useEffect(() => {
     refresh();
-    api.get<{ gmailConnected: boolean }>("/api/profile/me").then((p) => setGmailConnected(p.gmailConnected));
+    api.get<{ gmailConnected: boolean }>("/api/profile/me").then((p) => setGmailConnected(p.gmailConnected)).catch(() => {});
   }, []);
 
   function connectGmail() {

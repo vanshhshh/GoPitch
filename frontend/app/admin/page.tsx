@@ -37,7 +37,7 @@ export default function AdminOverviewPage() {
     { label: "Companies", value: metrics.companyCount },
     { label: "Campaigns", value: metrics.campaignCount },
     { label: "Investors (total)", value: metrics.investorCount },
-    { label: "Verified investors", value: metrics.investorCount - metrics.unverifiedInvestorCount },
+    { label: "Verified investors", value: Math.max(0, metrics.investorCount - metrics.unverifiedInvestorCount) },
     { label: "Pending verification", value: metrics.unverifiedInvestorCount },
   ];
 

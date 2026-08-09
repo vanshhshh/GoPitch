@@ -7,12 +7,13 @@
  * annotate a document: a small circular stamp, not a generic progress bar or badge pill.
  */
 export function MatchStamp({ score, size = 44 }: { score: number; size?: number }) {
+  const clamped = Math.max(0, Math.min(100, score));
   const radius = (size - 6) / 2;
   const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (score / 100) * circumference;
+  const offset = circumference - (clamped / 100) * circumference;
   const toneClass =
-    score >= 70 ? "text-verified" : score >= 45 ? "text-signal" : "text-ink-soft";
-  const strokeColor = score >= 70 ? "#1F6F5C" : score >= 45 ? "#B8862E" : "#9AA0A6";
+    clamped >= 70 ? "text-verified" : clamped >= 45 ? "text-signal" : "text-ink-soft";
+  const strokeColor = clamped >= 70 ? "#1F6F5C" : clamped >= 45 ? "#B8862E" : "#9AA0A6";
 
   return (
     <div className="relative inline-flex items-center justify-center animate-fade-up" style={{ width: size, height: size }}>
@@ -31,7 +32,7 @@ export function MatchStamp({ score, size = 44 }: { score: number; size?: number 
           style={{ transition: "stroke-dashoffset 0.6s ease-out" }}
         />
       </svg>
-      <span className={`absolute font-mono text-[11px] font-medium ${toneClass}`}>{Math.round(score)}</span>
+      <span className={`absolute font-mono text-[11px] font-medium ${toneClass}`}>{Math.round(clamped)}</span>
     </div>
   );
 }

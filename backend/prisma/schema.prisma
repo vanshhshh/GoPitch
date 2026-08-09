@@ -36,7 +36,10 @@ model User {
   subscription  Subscription?
   campaigns     Campaign[]
   emailSends    EmailSend[]
+  invoices      Invoice[]
 }
+
+// ---------- Founder input / product profile ----------
 
 // ---------- Founder input / product profile ----------
 
@@ -199,13 +202,32 @@ model Subscription {
 }
 
 enum PlanTier {
-  STARTER        // one-time: deck + 30 curated matches
-  GROWTH         // monthly: active campaign mgmt + expanding list
-  EXPANSION_ADDON // one-time top-up: +50 more scored investors unlocked
+  STARTER
+  GROWTH
+  ENTERPRISE
 }
 
 enum SubStatus {
   ACTIVE
   PAST_DUE
   CANCELLED
+}
+
+model Invoice {
+  id                String    @id @default(cuid())
+  userId            String
+  user              User      @relation(fields: [userId], references: [id])
+  razorpayOrderId   String?   @unique
+  razorpayPaymentId String?
+  tier              String
+  amountInr         Int
+  status            InvoiceStatus @default(CREATED)
+  createdAt         DateTime  @default(now())
+}
+
+enum InvoiceStatus {
+  CREATED
+  PAID
+  FAILED
+  REFUNDED
 }

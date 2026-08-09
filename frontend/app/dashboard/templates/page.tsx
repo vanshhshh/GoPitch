@@ -18,7 +18,7 @@ export default function TemplatesPage() {
   const [editing, setEditing] = useState<Template | null>(null);
 
   function refresh() {
-    api.get<Template[]>("/api/email-templates").then(setTemplates);
+    api.get<Template[]>("/api/email-templates").then(setTemplates).catch(() => toast.error("Couldn't load templates."));
   }
 
   useEffect(refresh, []);

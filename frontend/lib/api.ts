@@ -25,7 +25,12 @@ export function clearToken() {
 export function getStoredUser(): { id: string; email: string; role: string } | null {
   if (typeof window === "undefined") return null;
   const raw = localStorage.getItem("gopitch_user");
-  return raw ? JSON.parse(raw) : null;
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
 export function setStoredUser(user: { id: string; email: string; role: string }) {

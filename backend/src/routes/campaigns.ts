@@ -102,13 +102,6 @@ campaignRouter.post("/", async (req, res) => {
   const { companyId, tier } = parsed.data;
   const userId = req.auth!.userId;
 
-  if (!isAIFeatureAvailable("email")) {
-    return res.status(503).json({
-      error: "AI email generation is not available right now. Draft emails manually or try again later.",
-      manualEmailRequired: true,
-    });
-  }
-
   const subscription = (
     await pool.query("SELECT tier, status, current_period_end FROM subscriptions WHERE user_id = $1", [userId])
   ).rows[0];
@@ -118,6 +111,13 @@ campaignRouter.post("/", async (req, res) => {
       error: authorization.reason,
       entitlementTier: authorization.entitlementTier,
       requiredTier: tier,
+    });
+  }
+
+  if (!isAIFeatureAvailable("email")) {
+    return res.status(503).json({
+      error: "AI email generation is not available right now. Draft emails manually or try again later.",
+      manualEmailRequired: true,
     });
   }
 

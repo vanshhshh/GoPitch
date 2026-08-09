@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import toast from "react-hot-toast";
 import { api } from "@/lib/api";
 import { MatchStamp } from "@/components/MatchStamp";
 
@@ -29,7 +30,7 @@ export default function OutreachPage() {
   const [filter, setFilter] = useState<string>("ALL");
 
   useEffect(() => {
-    api.get<Send[]>("/api/sends").then(setSends);
+    api.get<Send[]>("/api/sends").then(setSends).catch(() => toast.error("Couldn't load outreach data."));
   }, []);
 
   const filtered = sends?.filter((s) => filter === "ALL" || s.status === filter) ?? [];

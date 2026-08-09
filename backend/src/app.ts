@@ -26,7 +26,24 @@ export const app = express();
 // X-Frame-Options, etc). CSP is left at helmet's default here since this API serves
 // JSON, not HTML — a strict CSP matters for the frontend app, not this backend.
 app.use(helmet());
-app.use(cors());
+const allowedOrigins = new Set([
+  process.env.FRONTEND_URL || "http://localhost:3000",
+  "http://localhost:3000",
+  "http://localhost:4000",
+]);
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && allowedOrigins.has(origin)) {
+    res.header("Access-Control-Allow-Origin", origin);
+    res.header("Vary", "Origin");
+    res.header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.header("Access-Control-Allow-Credentials", "true");
+  }
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
 app.set("trust proxy", 1); // needed for correct client IPs behind Hostinger's/any reverse proxy, which rate limiting relies on
 
 // The Razorpay webhook needs the exact raw request bytes to verify its signature

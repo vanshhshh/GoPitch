@@ -23,8 +23,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [user, setUser] = useState<{ email: string } | null>(null);
 
   useEffect(() => {
-    setUser(getStoredUser());
-  }, []);
+    const stored = getStoredUser();
+    const token = localStorage.getItem("gopitch_token");
+    if (!stored || !token) {
+      router.replace("/login");
+      return;
+    }
+    setUser(stored);
+  }, [router]);
 
   function logout() {
     clearToken();

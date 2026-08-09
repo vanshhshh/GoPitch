@@ -24,12 +24,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   useEffect(() => {
     const stored = getStoredUser();
+    const token = localStorage.getItem("gopitch_token");
+    if (!stored || !token) {
+      router.replace("/login");
+      return;
+    }
     setUser(stored);
     api
       .get<{ readAt: string | null }[]>("/api/notifications")
       .then((n) => setUnreadCount(n.filter((x) => !x.readAt).length))
       .catch(() => {});
-  }, [pathname]);
+  }, [pathname, router]);
 
   function logout() {
     clearToken();

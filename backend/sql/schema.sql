@@ -131,7 +131,8 @@ CREATE TABLE subscriptions (
 CREATE TABLE invoices (
   id                TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
   user_id           TEXT NOT NULL REFERENCES users(id),
-  razorpay_order_id TEXT,
+  subscription_id   TEXT REFERENCES subscriptions(id),
+  razorpay_order_id TEXT UNIQUE,
   razorpay_payment_id TEXT,
   tier              TEXT NOT NULL,
   amount_inr        INTEGER NOT NULL,

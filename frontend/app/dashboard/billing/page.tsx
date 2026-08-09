@@ -80,12 +80,17 @@ export default function BillingPage() {
         description: `${tier.name} plan`,
         order_id: res.orderId,
         theme: { color: "#1F6F5C" },
-        handler: () => {
+        handler: async () => {
           toast.success("Payment complete — activating your plan.");
-          setTimeout(() => {
-            api.get<Subscription>("/api/billing/subscription").then(setSubscription);
-            api.get<Invoice[]>("/api/billing/invoices").then(setInvoices);
-          }, 2000); // webhook needs a moment to land
+          let attempts = 0;
+          while (attempts < 15) {
+            await new Promise((r) => setTimeout(r, 2000));
+            const sub = await api.get<Subscription>("/api/billing/subscription");
+            setSubscription(sub);
+            if (sub.tier === tier.id && sub.status === "ACTIVE") break;
+            attempts++;
+          }
+          api.get<Invoice[]>("/api/billing/invoices").then(setInvoices);
         },
       });
       rzp.open();
@@ -93,6 +98,16 @@ export default function BillingPage() {
       toast.error(err instanceof ApiError ? err.message : "Couldn't start checkout.");
     } finally {
       setCheckingOut(null);
+    }
+  }
+
+  async function handleCancel() {
+    try {
+      await api.post("/api/billing/cancel", {});
+      toast.success("Subscription cancelled.");
+      api.get<Subscription>("/api/billing/subscription").then(setSubscription);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't cancel subscription.");
     }
   }
 
@@ -104,6 +119,12 @@ export default function BillingPage() {
           ? `Current plan: ${subscription.tier} (${subscription.status})`
           : "No active plan yet."}
       </p>
+
+      {subscription?.tier && subscription.status === "ACTIVE" && (
+        <button className="btn-secondary text-sm mb-6" onClick={handleCancel}>
+          Cancel subscription
+        </button>
+      )}
 
       {tiers === null ? (
         <p className="text-ink-soft text-sm">Loading…</p>

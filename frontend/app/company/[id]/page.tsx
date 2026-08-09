@@ -63,6 +63,7 @@ export default function CompanyPage() {
   const [tierInfo, setTierInfo] = useState<any>(null);
   const [preview, setPreview] = useState<MatchPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [userTier, setUserTier] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -84,6 +85,14 @@ export default function CompanyPage() {
         if (cancelled) return;
         setCompanyError(err instanceof ApiError ? err.message : "Company not found.");
       });
+
+    api.get<{ tier: string | null }>(`/api/billing/subscription`).then((sub) => {
+      if (cancelled) return;
+      setUserTier(sub.tier || "STARTER");
+    }).catch(() => {
+      if (cancelled) return;
+      setUserTier("STARTER");
+    });
 
     return () => {
       cancelled = true;
@@ -128,7 +137,7 @@ export default function CompanyPage() {
     try {
       const res = await api.post<{ drafts: Draft[]; tierInfo: any }>("/api/campaigns", {
         companyId,
-        tier: "STARTER",
+        tier: userTier || "STARTER",
       });
       setDrafts(res.drafts.sort((a, b) => b.matchScore - a.matchScore));
       setTierInfo(res.tierInfo);
@@ -218,7 +227,7 @@ export default function CompanyPage() {
                 className="btn-secondary text-sm"
                 href={`${process.env.NEXT_PUBLIC_API_BASE || "http://localhost:4000"}/api/decks/file/${latestDeck.id}`}
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer"
               >
                 Open deck
               </a>
@@ -308,7 +317,7 @@ export default function CompanyPage() {
 
           {tierInfo && (
             <p className="text-xs text-ink-soft mb-4">
-              {tierInfo.name} — ₹{tierInfo.priceInr.toLocaleString()} {tierInfo.billing === "one_time" ? "one-time" : "/mo"}
+              {tierInfo.name} — {tierInfo.priceInr != null ? `₹${tierInfo.priceInr.toLocaleString()} ${tierInfo.billing === "one_time" ? "one-time" : "/mo"}` : "Custom pricing"}
             </p>
           )}
 
