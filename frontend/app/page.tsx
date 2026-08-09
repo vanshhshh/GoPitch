@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import { MarketingNav } from "@/components/MarketingNav";
 import { MarketingFooter } from "@/components/MarketingFooter";
 import { MatchStamp } from "@/components/MatchStamp";
-import { getStoredUser } from "@/lib/api";
+import { getStoredUser, getToken } from "@/lib/api";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 16 },
@@ -56,6 +56,8 @@ export default function LandingPage() {
   const router = useRouter();
 
   useEffect(() => {
+    const token = getToken();
+    if (!token) return;
     const user = getStoredUser();
     if (user?.role === "ADMIN") router.replace("/admin");
     else if (user) router.replace("/dashboard");

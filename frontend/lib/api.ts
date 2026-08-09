@@ -8,7 +8,7 @@ export class ApiError extends Error {
   }
 }
 
-function getToken(): string | null {
+export function getToken(): string | null {
   if (typeof window === "undefined") return null;
   return localStorage.getItem("gopitch_token");
 }
@@ -19,6 +19,7 @@ export function setToken(token: string) {
 
 export function clearToken() {
   localStorage.removeItem("gopitch_token");
+  localStorage.removeItem("gopitch_user");
 }
 
 export function getStoredUser(): { id: string; email: string; role: string } | null {
