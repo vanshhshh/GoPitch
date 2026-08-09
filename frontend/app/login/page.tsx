@@ -119,7 +119,7 @@ export default function LoginPage() {
 
         <button
           type="button"
-          onClick={() => { window.location.href = "/auth/google/signin"; }}
+          onClick={() => { window.location.href = `${process.env.NEXT_PUBLIC_API_BASE || "http://localhost:4000"}/auth/google/signin`; }}
           className="w-full flex items-center justify-center gap-3 border border-line rounded bg-white py-2.5 text-sm font-medium text-ink hover:bg-line-soft transition-colors"
         >
           <svg width="20" height="20" viewBox="0 0 24 24">
