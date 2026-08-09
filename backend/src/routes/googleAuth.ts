@@ -6,11 +6,11 @@ import { verifyToken, signToken } from "../lib/auth";
 
 export const googleAuthRouter = Router();
 
-function getOAuthClient() {
+function getOAuthClient(redirectUri?: string) {
   return new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
-    process.env.GOOGLE_REDIRECT_URI
+    redirectUri || process.env.GOOGLE_REDIRECT_URI || "http://localhost:4000/auth/google/callback"
   );
 }
 
@@ -44,7 +44,7 @@ googleAuthRouter.get("/auth/google/init", (req, res) => {
     return res.status(401).json({ error: "Invalid or expired session — log in again before connecting Gmail." });
   }
 
-  const client = getOAuthClient();
+  const client = getOAuthClient(process.env.GOOGLE_REDIRECT_URI);
   const url = client.generateAuthUrl({
     access_type: "offline", // required to receive a refresh_token, not just a short-lived access_token
     prompt: "consent", // forces Google to re-issue a refresh_token even on repeat connects
@@ -73,7 +73,7 @@ googleAuthRouter.get("/auth/google/callback", async (req, res) => {
   }
 
   try {
-    const client = getOAuthClient();
+    const client = getOAuthClient(process.env.GOOGLE_REDIRECT_URI);
     const { tokens } = await client.getToken(code);
 
     client.setCredentials(tokens);
@@ -121,7 +121,8 @@ googleAuthRouter.get("/auth/google/callback", async (req, res) => {
  * Uses OpenID Connect scopes only. Never requests Gmail permissions.
  */
 googleAuthRouter.get("/auth/google/signin", (req, res) => {
-  const client = getOAuthClient();
+  const signinRedirectUri = process.env.GOOGLE_SIGNIN_REDIRECT_URI || `${process.env.GOOGLE_REDIRECT_URI?.replace('/auth/google/callback', '/auth/google/signin/callback') || 'http://localhost:4000/auth/google/signin/callback'}`;
+  const client = getOAuthClient(signinRedirectUri);
   const state = Buffer.from(`${Date.now()}-${Math.random()}`).toString("base64url");
   cleanStateStore();
   oauthStateStore.set(state, Date.now());
@@ -152,7 +153,8 @@ googleAuthRouter.get("/auth/google/signin/callback", async (req, res) => {
   oauthStateStore.delete(state);
 
   try {
-    const client = getOAuthClient();
+    const signinRedirectUri = process.env.GOOGLE_SIGNIN_REDIRECT_URI || `${process.env.GOOGLE_REDIRECT_URI?.replace('/auth/google/callback', '/auth/google/signin/callback') || 'http://localhost:4000/auth/google/signin/callback'}`;
+    const client = getOAuthClient(signinRedirectUri);
     const { tokens } = await client.getToken(code);
     if (!tokens.id_token) {
       return res.redirect(`${frontendUrl}/login?google_error=no_id_token`);
