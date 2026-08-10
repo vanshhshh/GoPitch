@@ -81,7 +81,14 @@ export class AIRouter {
   }
 
   hasConfiguredProvider(feature: AIFeature): boolean {
-    return this.getProviderPriority(feature).some((provider) => this.providers[provider].isConfigured());
+    const priority = this.getProviderPriority(feature);
+    const configured = priority.filter((provider) => this.providers[provider].isConfigured());
+    console.log(`[ai] ${feature} provider check`, {
+      priority,
+      configured,
+      missing: priority.filter((p) => !this.providers[p].isConfigured()),
+    });
+    return configured.length > 0;
   }
 
   async completeJson(feature: AIFeature, system: string, userPrompt: string): Promise<{ text: string; provider: AIProviderId }> {
@@ -94,9 +101,13 @@ export class AIRouter {
 
       try {
         const text = await provider.completeJson(system, userPrompt);
-        if (text.trim()) return { text, provider: providerId };
+        if (text.trim()) {
+          console.log(`[ai] ${feature} succeeded with provider=${providerId}`);
+          return { text, provider: providerId };
+        }
       } catch (err) {
-        console.error(`AI provider ${providerId} failed for ${feature}:`, err);
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[ai] ${feature} provider ${providerId} failed: ${message.slice(0, 500)}`);
       }
     }
 

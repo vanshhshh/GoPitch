@@ -115,6 +115,7 @@ campaignRouter.post("/", async (req, res) => {
   }
 
   if (!isAIFeatureAvailable("email")) {
+    console.error("[campaign] AI email generation unavailable: no provider configured for email feature");
     return res.status(503).json({
       error: "AI email generation is not available right now. Draft emails manually or try again later.",
       manualEmailRequired: true,
@@ -225,6 +226,7 @@ campaignRouter.post("/", async (req, res) => {
       generatedEmails.push({ match, investor, email });
     } catch (err) {
       if (err instanceof AIProviderUnavailableError) {
+        console.error("[campaign] AI email generation failed for all providers:", err.message, "attempted:", err.attemptedProviders);
         return res.status(503).json({
           error: "AI email generation is temporarily unavailable. Draft emails manually or try again later.",
           manualEmailRequired: true,
