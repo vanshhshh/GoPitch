@@ -16,10 +16,14 @@ function GoogleHandler({ onError }: { onError: (msg: string) => void }) {
     const googleError = searchParams.get("google_error");
     if (token) {
       setToken(token);
-      api.get<{ id: string; email: string; role: string }>("/api/auth/me")
+      api.get<{ id: string; email: string; role: string; hasCompany: boolean }>("/api/auth/me")
         .then((user) => {
           setStoredUser(user);
-          router.push(user.role === "ADMIN" ? "/admin" : "/dashboard");
+          if (user.hasCompany) {
+            router.push(user.role === "ADMIN" ? "/admin" : "/dashboard");
+          } else {
+            router.push("/onboarding");
+          }
         })
         .catch(() => router.push("/login"));
     } else if (googleError) {
