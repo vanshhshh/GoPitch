@@ -153,65 +153,50 @@ googleAuthRouter.get("/auth/google/signin/callback", async (req, res) => {
   oauthStateStore.delete(state);
 
   try {
-    console.log("[google-signin] start", { hasCode: !!code, hasState: !!state, stateInStore: oauthStateStore.has(state) });
     const signinRedirectUri = process.env.GOOGLE_SIGNIN_REDIRECT_URI || `${process.env.GOOGLE_REDIRECT_URI?.replace('/auth/google/callback', '/auth/google/signin/callback') || 'http://localhost:4000/auth/google/signin/callback'}`;
     const client = getOAuthClient(signinRedirectUri);
-    console.log("[google-signin] exchanging code", { redirectUri: signinRedirectUri });
     const { tokens } = await client.getToken(code);
-    console.log("[google-signin] token exchange result", { hasIdToken: !!tokens.id_token, hasAccessToken: !!tokens.access_token, hasRefreshToken: !!tokens.refresh_token });
     if (!tokens.id_token) {
       return res.redirect(`${frontendUrl}/login?google_error=no_id_token`);
     }
 
     client.setCredentials(tokens);
     const oauth2 = google.oauth2({ auth: client, version: "v2" });
-    console.log("[google-signin] fetching userinfo");
     const { data: profile } = await oauth2.userinfo.get();
-    console.log("[google-signin] userinfo result", { email: profile.email, hasSub: !!profile.id, name: profile.name });
 
     const googleSub = profile.id;
     const googleEmail = profile.email?.toLowerCase();
     const googleName = profile.name;
 
     if (!googleEmail || !googleSub) {
-      console.error("[google-signin] missing profile fields", { email: !!googleEmail, sub: !!googleSub });
       return res.redirect(`${frontendUrl}/login?google_error=missing_profile`);
     }
 
-    console.log("[google-signin] DB lookup by google_sub", { googleSub });
     let result = await pool.query("SELECT id, email, name, role FROM users WHERE google_sub = $1", [googleSub]);
     let user = result.rows[0];
-    console.log("[google-signin] DB lookup by google_sub result", { found: !!user });
 
     if (!user) {
-      console.log("[google-signin] DB lookup by email", { googleEmail });
       result = await pool.query("SELECT id, email, name, role FROM users WHERE email = $1", [googleEmail]);
       user = result.rows[0];
-      console.log("[google-signin] DB lookup by email result", { found: !!user });
 
       if (user) {
-        console.log("[google-signin] linking google_sub to existing user", { userId: user.id });
         await pool.query(
           `UPDATE users SET google_sub = $1, google_email = $2 WHERE id = $3`,
           [googleSub, googleEmail, user.id]
         );
       } else {
-        console.log("[google-signin] creating new user", { googleEmail, googleName });
         result = await pool.query(
           `INSERT INTO users (email, name, role, google_sub, google_email) VALUES ($1, $2, 'FOUNDER', $3, $4) RETURNING id, email, name, role`,
           [googleEmail, googleName, googleSub, googleEmail]
         );
         user = result.rows[0];
-        console.log("[google-signin] created new user", { userId: user.id });
       }
     }
 
-    console.log("[google-signin] creating JWT", { userId: user.id, role: user.role });
     const token = signToken({ userId: user.id, role: user.role });
-    console.log("[google-signin] success, redirecting", { frontendUrl });
     res.redirect(`${frontendUrl}/login?google_token=${token}`);
   } catch (err) {
-    console.error("[google-signin] callback failed:", err);
+    console.error("Google Sign-In callback failed:", err);
     res.redirect(`${frontendUrl}/login?google_error=auth_failed`);
   }
 });
