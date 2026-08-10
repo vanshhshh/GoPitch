@@ -19,23 +19,20 @@ function baseState(overrides: Partial<UserSendState> = {}): UserSendState {
 }
 
 describe("getWarmupCap", () => {
-  it("starts new accounts at the lowest cap", () => {
-    expect(getWarmupCap(0)).toBe(15);
+  it("starts new accounts at 50/day for the first 3 days", () => {
+    expect(getWarmupCap(0)).toBe(50);
+    expect(getWarmupCap(1)).toBe(50);
+    expect(getWarmupCap(2)).toBe(50);
   });
 
-  it("increases cap at each warm-up milestone", () => {
-    expect(getWarmupCap(4)).toBe(25);
-    expect(getWarmupCap(8)).toBe(40);
-    expect(getWarmupCap(14)).toBe(60);
-    expect(getWarmupCap(21)).toBe(80);
+  it("raises to 150/day after warmup", () => {
+    expect(getWarmupCap(3)).toBe(150);
+    expect(getWarmupCap(7)).toBe(150);
+    expect(getWarmupCap(365)).toBe(150);
   });
 
-  it("never exceeds the hard ceiling even for very old accounts", () => {
-    expect(getWarmupCap(365)).toBe(80);
-  });
-
-  it("uses the highest applicable milestone, not the nearest", () => {
-    expect(getWarmupCap(6)).toBe(25); // between day-4 and day-8 milestones
+  it("never exceeds the hard ceiling", () => {
+    expect(getWarmupCap(365)).toBe(150);
   });
 });
 
@@ -43,12 +40,12 @@ describe("evaluateSend", () => {
   it("allows sending within cap for a fresh, healthy account", () => {
     const decision = evaluateSend(baseState({ sentTodayCount: 5 }));
     expect(decision.allowed).toBe(true);
-    expect(decision.dailyCap).toBe(15);
-    expect(decision.remainingToday).toBe(10);
+    expect(decision.dailyCap).toBe(50);
+    expect(decision.remainingToday).toBe(45);
   });
 
   it("blocks sending once the daily cap is reached", () => {
-    const decision = evaluateSend(baseState({ sentTodayCount: 15 }));
+    const decision = evaluateSend(baseState({ sentTodayCount: 50 }));
     expect(decision.allowed).toBe(false);
     expect(decision.remainingToday).toBe(0);
     expect(decision.reason).toMatch(/daily send cap reached/i);
@@ -75,10 +72,10 @@ describe("evaluateSend", () => {
   });
 
   it("scales the effective cap down smoothly as reputation degrades", () => {
-    const healthy = evaluateSend(baseState({ accountAgeDays: 21, sendReputationScore: 1.0 }));
-    const degraded = evaluateSend(baseState({ accountAgeDays: 21, sendReputationScore: 0.5 }));
+    const healthy = evaluateSend(baseState({ accountAgeDays: 3, sendReputationScore: 1.0 }));
+    const degraded = evaluateSend(baseState({ accountAgeDays: 3, sendReputationScore: 0.5 }));
     expect(degraded.dailyCap).toBeLessThan(healthy.dailyCap);
-    expect(degraded.dailyCap).toBe(40); // 80 * 0.5
+    expect(degraded.dailyCap).toBe(75); // 150 * 0.5
   });
 });
 

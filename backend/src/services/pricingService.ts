@@ -85,32 +85,32 @@ export const PLAN_LIMITS: Record<EntitlementTierId, PlanLimits> = {
   FREE: {
     investorEmails: 30,
     activeCampaigns: 1,
-    dailySendLimit: 10,
-    warmupDailyLimit: 10,
-    postWarmupDailyLimit: 10,
+    dailySendLimit: 50,
+    warmupDailyLimit: 50,
+    postWarmupDailyLimit: 150,
   },
   STARTER: {
     investorEmails: 100,
     activeCampaigns: null,
-    dailySendLimit: 25,
-    warmupDailyLimit: 25,
-    postWarmupDailyLimit: 25,
+    dailySendLimit: 50,
+    warmupDailyLimit: 50,
+    postWarmupDailyLimit: 150,
   },
   GROWTH: {
     investorEmails: 500,
     activeCampaigns: null,
-    dailySendLimit: 50,
-    warmupDailyLimit: 50,
-    postWarmupDailyLimit: 100,
+    dailySendLimit: 150,
+    warmupDailyLimit: 150,
+    postWarmupDailyLimit: 150,
   },
   ENTERPRISE: {
     investorEmails: Number(process.env.ENTERPRISE_INVESTOR_EMAIL_LIMIT || Number.MAX_SAFE_INTEGER),
     activeCampaigns: process.env.ENTERPRISE_ACTIVE_CAMPAIGN_LIMIT
       ? Number(process.env.ENTERPRISE_ACTIVE_CAMPAIGN_LIMIT)
       : null,
-    dailySendLimit: Number(process.env.ENTERPRISE_DAILY_SEND_LIMIT || 200),
-    warmupDailyLimit: Number(process.env.ENTERPRISE_WARMUP_DAILY_LIMIT || 200),
-    postWarmupDailyLimit: Number(process.env.ENTERPRISE_POST_WARMUP_DAILY_LIMIT || 500),
+    dailySendLimit: Number(process.env.ENTERPRISE_DAILY_SEND_LIMIT || 500),
+    warmupDailyLimit: Number(process.env.ENTERPRISE_WARMUP_DAILY_LIMIT || 500),
+    postWarmupDailyLimit: Number(process.env.ENTERPRISE_POST_WARMUP_DAILY_LIMIT || 1000),
   },
 };
 

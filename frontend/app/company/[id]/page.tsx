@@ -64,6 +64,7 @@ export default function CompanyPage() {
   const [preview, setPreview] = useState<MatchPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [userTier, setUserTier] = useState<string | null>(null);
+  const [selectedCount, setSelectedCount] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -134,13 +135,15 @@ export default function CompanyPage() {
   async function handleLaunchCampaign() {
     setCreatingCampaign(true);
     setCampaignError(null);
+    setSelectedCount(null);
     try {
-      const res = await api.post<{ drafts: Draft[]; tierInfo: any }>("/api/campaigns", {
+      const res = await api.post<{ drafts: Draft[]; tierInfo: any; entitlement: { tier: string; investorLimit: number } }>("/api/campaigns", {
         companyId,
         tier: userTier || "STARTER",
       });
       setDrafts(res.drafts.sort((a, b) => b.matchScore - a.matchScore));
       setTierInfo(res.tierInfo);
+      setSelectedCount(res.drafts.length);
       refreshPreview();
     } catch (err) {
       setCampaignError(err instanceof ApiError ? err.message : "Couldn't create campaign.");
@@ -282,11 +285,14 @@ export default function CompanyPage() {
                   <Link href={`/company/${companyId}?view=all-matches`} className="btn-secondary text-sm">
                     View all matches
                   </Link>
-                  <button className="btn-primary" onClick={handleLaunchCampaign} disabled={creatingCampaign}>
+                  <button className="btn-primary" onClick={handleLaunchCampaign} disabled={creatingCampaign || !hasDeck}>
                     {creatingCampaign ? "Starting..." : "Start campaign"}
                   </button>
                 </div>
               </div>
+              <p className="text-xs text-ink-soft mb-3">
+                Top {preview.investors.length} matches shown · {preview.totalMatches.toLocaleString()} total matches in database
+              </p>
               <div className="grid gap-2">
                 {preview.investors.map((investor) => (
                   <div key={investor.id} className="border border-line-soft rounded p-3 flex items-start justify-between gap-4">
@@ -323,6 +329,7 @@ export default function CompanyPage() {
           {tierInfo && (
             <p className="text-xs text-ink-soft mb-4">
               {tierInfo.name} — {tierInfo.priceInr != null ? `₹${tierInfo.priceInr.toLocaleString()} ${tierInfo.billing === "one_time" ? "one-time" : "/mo"}` : "Custom pricing"}
+              {selectedCount !== null && ` · ${selectedCount} investors selected for outreach`}
             </p>
           )}
 

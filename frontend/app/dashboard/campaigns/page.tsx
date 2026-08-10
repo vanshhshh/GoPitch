@@ -108,7 +108,9 @@ export default function CampaignsPage() {
           </div>
           <div className="mt-4 pt-4 border-t border-line-soft">
             <p className="text-xs text-ink-soft">
-              Warmup: Day {quota.accountAgeDays} of 21 · Current cap {quota.warmupCap}/day · Today sent {quota.sentToday} · Remaining today {quota.remainingToday}
+              {quota.accountAgeDays < 3
+                ? `Warmup: Day ${quota.accountAgeDays + 1} of 3 · Current cap ${quota.currentDailyLimit}/day · Today sent ${quota.sentToday} · Remaining today ${quota.remainingToday}`
+                : `Warmup: Complete · Daily limit ${quota.currentDailyLimit}/day · Today sent ${quota.sentToday} · Remaining today ${quota.remainingToday}`}
             </p>
           </div>
         </div>

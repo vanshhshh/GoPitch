@@ -35,18 +35,13 @@ export interface RateLimitDecision {
   nextEligibleSendDelayMs?: number;
 }
 
-// Warm-up ramp: conservative on purpose. Vansh's own 450/24h test was on an aged,
-// already-trusted personal account — new users connecting fresh accounts through
-// OAuth do not inherit that trust and must be treated as unproven.
+// Warm-up ramp: 3 days at 50/day, then 150/day after warmup.
 const WARMUP_SCHEDULE: { minDay: number; cap: number }[] = [
-  { minDay: 0, cap: 15 },
-  { minDay: 4, cap: 25 },
-  { minDay: 8, cap: 40 },
-  { minDay: 14, cap: 60 },
-  { minDay: 21, cap: 80 }, // steady-state ceiling — well under typical consumer Gmail send limits
+  { minDay: 0, cap: 50 },
+  { minDay: 3, cap: 150 },
 ];
 
-const HARD_CEILING = 80; // never exceed regardless of age/reputation — safety margin under platform limits
+const HARD_CEILING = 150; // never exceed regardless of age/reputation — safety margin under platform limits
 
 // Reputation circuit breakers — these override the warm-up cap entirely
 const BOUNCE_PAUSE_THRESHOLD = 3; // 3+ bounces in 7 days -> pause sending, force list re-verification
