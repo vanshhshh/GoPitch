@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { pool } from "../lib/db";
 import { requireAuth } from "../lib/auth";
-import { evaluateSend, UserSendState, applyReputationEvent } from "../services/sendScheduler";
+import { evaluateSend, UserSendState, applyReputationEvent, getWarmupCap } from "../services/sendScheduler";
 import { deliverEmail } from "../lib/emailDelivery";
 import { classifyInboundMessage, extractBouncedRecipient } from "../lib/bounceClassifier";
 import { createNotification } from "./notifications";
@@ -35,6 +35,56 @@ sendRouter.get("/analytics", async (req, res) => {
     sendsByStatus: statusCounts,
     averageMatchScore: avgScore.rows[0].avg ? Math.round(avgScore.rows[0].avg * 10) / 10 : null,
     sentByDay: byDay.rows.map((r) => ({ date: r.day, count: r.count })),
+  });
+});
+
+sendRouter.get("/quota", async (req, res) => {
+  const userId = req.auth!.userId;
+
+  const subscriptionRow = await pool.query("SELECT tier, status, current_period_end FROM subscriptions WHERE user_id = $1", [userId]);
+  const entitlementTier = resolveEntitlementTier(subscriptionRow.rows[0] || undefined);
+  const limits = PLAN_LIMITS[entitlementTier];
+
+  const totalSentResult = await pool.query(
+    "SELECT COUNT(*)::int AS count FROM email_sends WHERE user_id = $1 AND status = 'SENT'",
+    [userId]
+  );
+  const totalSent = totalSentResult.rows[0].count;
+
+  const queuedResult = await pool.query(
+    "SELECT COUNT(*)::int AS count FROM email_sends WHERE user_id = $1 AND status = 'QUEUED'",
+    [userId]
+  );
+  const queued = queuedResult.rows[0].count;
+
+  const sentTodayResult = await pool.query(
+    `SELECT COUNT(*)::int AS count FROM email_sends
+     WHERE user_id = $1 AND status = 'SENT' AND sent_at >= date_trunc('day', now())`,
+    [userId]
+  );
+  const sentToday = sentTodayResult.rows[0].count;
+
+  const userRow = (await pool.query("SELECT * FROM users WHERE id = $1", [userId])).rows[0];
+  const accountAgeDays = userRow.gmail_connected_at
+    ? Math.floor((Date.now() - new Date(userRow.gmail_connected_at).getTime()) / 86_400_000)
+    : 0;
+  const warmupCap = getWarmupCap(accountAgeDays);
+  const remainingToday = Math.max(0, warmupCap - sentToday);
+
+  res.json({
+    entitlementTier,
+    investorEmailsTotal: limits.investorEmails,
+    investorEmailsSent: totalSent,
+    investorEmailsRemaining: limits.investorEmails === Number.MAX_SAFE_INTEGER ? null : Math.max(0, limits.investorEmails - totalSent),
+    queuedEmails: queued,
+    dailySendLimit: limits.dailySendLimit,
+    warmupDailyLimit: limits.warmupDailyLimit,
+    postWarmupDailyLimit: limits.postWarmupDailyLimit,
+    currentDailyLimit: warmupCap,
+    sentToday,
+    remainingToday,
+    accountAgeDays,
+    warmupCap,
   });
 });
 sendRouter.get("/", async (req, res) => {

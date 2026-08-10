@@ -23,7 +23,10 @@ interface Invoice {
 interface Subscription {
   tier: string | null;
   status: string | null;
+  currentPeriodStart: string | null;
   currentPeriodEnd: string | null;
+  cancelAtPeriodEnd: boolean | null;
+  cancelledAt: string | null;
 }
 
 declare global {
@@ -124,6 +127,12 @@ export default function BillingPage() {
         <button className="btn-secondary text-sm mb-6" onClick={handleCancel}>
           Cancel subscription
         </button>
+      )}
+
+      {subscription?.status === "CANCELLED" && subscription.cancelAtPeriodEnd && subscription.currentPeriodEnd && (
+        <p className="text-sm text-signal mb-6">
+          Cancels on {new Date(subscription.currentPeriodEnd).toLocaleDateString()}
+        </p>
       )}
 
       {tiers === null ? (

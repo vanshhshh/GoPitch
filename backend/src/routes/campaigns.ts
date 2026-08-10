@@ -45,11 +45,15 @@ campaignRouter.get("/preview/:companyId", async (req, res) => {
   };
 
   const ranked = rankInvestors(companyProfile, investors, warmthMap, 5);
+  const totalRanked = rankInvestors(companyProfile, investors, warmthMap, investors.length);
+  const totalMatches = totalRanked.length;
+  const totalFundsMatched = new Set(totalRanked.map((r) => investors.find((i) => i.id === r.investorId)?.firm).filter(Boolean)).size;
+
   if (ranked.length > 0) {
     const byId = new Map(investors.map((i) => [i.id, i]));
     return res.json({
-      total: ranked.length,
-      qualifiedTotal: verifiedRows.rowCount,
+      totalMatches,
+      totalFundsMatched,
       mode: "verified",
       investors: ranked.map((m) => {
         const investor = byId.get(m.investorId)!;
@@ -75,8 +79,8 @@ campaignRouter.get("/preview/:companyId", async (req, res) => {
   );
   const total = await pool.query("SELECT count(*)::int AS total FROM investors");
   res.json({
-    total: total.rows[0].total,
-    qualifiedTotal: 0,
+    totalMatches: total.rows[0].total,
+    totalFundsMatched: 0,
     mode: "imported",
     investors: fallback.rows.map((i) => ({
       id: i.id,

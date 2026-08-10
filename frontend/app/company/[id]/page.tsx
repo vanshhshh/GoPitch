@@ -36,8 +36,8 @@ interface Draft {
 }
 
 interface MatchPreview {
-  total: number;
-  qualifiedTotal: number;
+  totalMatches: number;
+  totalFundsMatched: number;
   mode: "verified" | "imported";
   investors: {
     id: string;
@@ -271,16 +271,21 @@ export default function CompanyPage() {
             <div className="mb-5">
               <div className="flex items-end justify-between gap-4 mb-3">
                 <div>
-                  <p className="text-3xl font-display">{preview.total.toLocaleString()}</p>
+                  <p className="text-3xl font-display">{preview.totalMatches.toLocaleString()}</p>
                   <p className="text-xs text-ink-soft">
                     {preview.mode === "verified"
-                      ? "qualified investor matches found"
+                      ? `${preview.totalFundsMatched.toLocaleString()} funds matched`
                       : "investor contacts available; thesis enrichment pending"}
                   </p>
                 </div>
-                <button className="btn-primary" onClick={handleLaunchCampaign} disabled={creatingCampaign}>
-                  {creatingCampaign ? "Starting..." : "Start campaign"}
-                </button>
+                <div className="flex gap-2">
+                  <Link href={`/company/${companyId}?view=all-matches`} className="btn-secondary text-sm">
+                    View all matches
+                  </Link>
+                  <button className="btn-primary" onClick={handleLaunchCampaign} disabled={creatingCampaign}>
+                    {creatingCampaign ? "Starting..." : "Start campaign"}
+                  </button>
+                </div>
               </div>
               <div className="grid gap-2">
                 {preview.investors.map((investor) => (

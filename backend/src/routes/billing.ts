@@ -101,16 +101,16 @@ billingRouter.post("/webhook", async (req, res) => {
         : null;
 
       await pool.query(
-        `INSERT INTO subscriptions (user_id, tier, status, current_period_end, razorpay_subscription_id)
-         VALUES ($1, $2, 'ACTIVE', $3, $4)
-         ON CONFLICT (user_id) DO UPDATE SET tier = $2, status = 'ACTIVE', current_period_end = $3, razorpay_subscription_id = $4`,
+        `INSERT INTO subscriptions (user_id, tier, status, current_period_start, current_period_end, razorpay_subscription_id, cancel_at_period_end)
+         VALUES ($1, $2, 'ACTIVE', now(), $3, $4, false)
+         ON CONFLICT (user_id) DO UPDATE SET tier = $2, status = 'ACTIVE', current_period_start = now(), current_period_end = $3, razorpay_subscription_id = $4, cancel_at_period_end = false`,
         [userId, tier, periodEnd, payment.id]
       );
     } else if (event.event === "subscription.cancelled") {
       const subscription = event.payload.subscription?.entity;
       const userId = subscription?.notes?.userId;
       if (userId) {
-        await pool.query("UPDATE subscriptions SET status = 'CANCELLED' WHERE user_id = $1", [userId]);
+        await pool.query("UPDATE subscriptions SET status = 'CANCELLED', cancelled_at = now() WHERE user_id = $1", [userId]);
       }
     } else if (event.event === "subscription.activated") {
       const subscription = event.payload.subscription?.entity;
@@ -118,7 +118,7 @@ billingRouter.post("/webhook", async (req, res) => {
       const subscriptionId = subscription?.id;
       if (userId && subscriptionId) {
         await pool.query(
-          `UPDATE subscriptions SET status = 'ACTIVE', current_period_end = $1, razorpay_subscription_id = $2 WHERE user_id = $3`,
+          `UPDATE subscriptions SET status = 'ACTIVE', current_period_start = now(), current_period_end = $1, razorpay_subscription_id = $2, cancel_at_period_end = false WHERE user_id = $3`,
           [new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), subscriptionId, userId]
         );
       }
@@ -127,7 +127,7 @@ billingRouter.post("/webhook", async (req, res) => {
       const userId = subscription?.notes?.userId;
       if (userId) {
         await pool.query(
-          `UPDATE subscriptions SET status = 'ACTIVE', current_period_end = $1 WHERE user_id = $2`,
+          `UPDATE subscriptions SET status = 'ACTIVE', current_period_start = now(), current_period_end = $1 WHERE user_id = $2`,
           [new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), userId]
         );
       }
@@ -136,6 +136,15 @@ billingRouter.post("/webhook", async (req, res) => {
       const userId = subscription?.notes?.userId;
       if (userId) {
         await pool.query("UPDATE subscriptions SET status = 'CANCELLED' WHERE user_id = $1", [userId]);
+      }
+    } else if (event.event === "subscription.renewed") {
+      const subscription = event.payload.subscription?.entity;
+      const userId = subscription?.notes?.userId;
+      if (userId) {
+        await pool.query(
+          `UPDATE subscriptions SET status = 'ACTIVE', current_period_start = now(), current_period_end = $1 WHERE user_id = $2`,
+          [new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), userId]
+        );
       }
     } else if (event.event === "payment.failed") {
       const payment = event.payload.payment?.entity;
@@ -239,7 +248,10 @@ billingRouter.get("/subscription", async (req, res) => {
   res.json({
     tier: sub.tier,
     status: sub.status,
+    currentPeriodStart: sub.current_period_start,
     currentPeriodEnd: sub.current_period_end,
+    cancelAtPeriodEnd: sub.cancel_at_period_end,
+    cancelledAt: sub.cancelled_at,
   });
 });
 
@@ -258,7 +270,7 @@ billingRouter.post("/cancel", async (req, res) => {
     }
   }
 
-  await pool.query("UPDATE subscriptions SET status = 'CANCELLED' WHERE user_id = $1", [userId]);
+  await pool.query("UPDATE subscriptions SET status = 'CANCELLED', cancelled_at = now() WHERE user_id = $1", [userId]);
   res.json({ ok: true });
 });
 

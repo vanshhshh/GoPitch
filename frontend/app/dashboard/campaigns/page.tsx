@@ -15,10 +15,27 @@ interface Campaign {
   createdAt: string;
 }
 
+interface QuotaInfo {
+  entitlementTier: string;
+  investorEmailsTotal: number;
+  investorEmailsSent: number;
+  investorEmailsRemaining: number | null;
+  queuedEmails: number;
+  dailySendLimit: number;
+  warmupDailyLimit: number;
+  postWarmupDailyLimit: number;
+  currentDailyLimit: number;
+  sentToday: number;
+  remainingToday: number;
+  accountAgeDays: number;
+  warmupCap: number;
+}
+
 export default function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<Campaign[] | null>(null);
   const [dispatching, setDispatching] = useState<string | null>(null);
   const [gmailConnected, setGmailConnected] = useState<boolean | null>(null);
+  const [quota, setQuota] = useState<QuotaInfo | null>(null);
 
   function refresh() {
     api.get<Campaign[]>("/api/campaigns").then(setCampaigns).catch(() => toast.error("Couldn't load campaigns."));
@@ -27,6 +44,7 @@ export default function CampaignsPage() {
   useEffect(() => {
     refresh();
     api.get<{ gmailConnected: boolean }>("/api/profile/me").then((p) => setGmailConnected(p.gmailConnected)).catch(() => {});
+    api.get<QuotaInfo>("/api/sends/quota").then(setQuota).catch(() => {});
   }, []);
 
   function connectGmail() {
@@ -64,6 +82,35 @@ export default function CampaignsPage() {
           <button className="btn-primary text-sm" onClick={connectGmail}>
             Connect Gmail
           </button>
+        </div>
+      )}
+
+      {quota && (
+        <div className="card p-5 mb-6 animate-fade-up">
+          <h3 className="font-display text-lg mb-3">Campaign Email Capacity</h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            <div>
+              <p className="text-xs text-ink-soft mb-1">Sent</p>
+              <p className="font-mono text-lg">{quota.investorEmailsSent}</p>
+            </div>
+            <div>
+              <p className="text-xs text-ink-soft mb-1">Remaining</p>
+              <p className="font-mono text-lg">{quota.investorEmailsRemaining ?? "∞"}</p>
+            </div>
+            <div>
+              <p className="text-xs text-ink-soft mb-1">Current daily limit</p>
+              <p className="font-mono text-lg">{quota.currentDailyLimit}/day</p>
+            </div>
+            <div>
+              <p className="text-xs text-ink-soft mb-1">After warmup</p>
+              <p className="font-mono text-lg">{quota.postWarmupDailyLimit}/day</p>
+            </div>
+          </div>
+          <div className="mt-4 pt-4 border-t border-line-soft">
+            <p className="text-xs text-ink-soft">
+              Warmup: Day {quota.accountAgeDays} of 21 · Current cap {quota.warmupCap}/day · Today sent {quota.sentToday} · Remaining today {quota.remainingToday}
+            </p>
+          </div>
         </div>
       )}
 

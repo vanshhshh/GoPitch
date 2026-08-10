@@ -28,12 +28,16 @@ const STATUS_STYLE: Record<string, string> = {
 export default function OutreachPage() {
   const [sends, setSends] = useState<Send[] | null>(null);
   const [filter, setFilter] = useState<string>("ALL");
+  const [counts, setCounts] = useState<Record<string, number>>({});
 
   useEffect(() => {
     api.get<Send[]>("/api/sends").then(setSends).catch(() => toast.error("Couldn't load outreach data."));
+    api.get<{ sendsByStatus: Record<string, number> }>("/api/sends/analytics").then((data) => setCounts(data.sendsByStatus)).catch(() => {});
   }, []);
 
   const filtered = sends?.filter((s) => filter === "ALL" || s.status === filter) ?? [];
+
+  const totalCount = Object.values(counts).reduce((a, b) => a + b, 0);
 
   return (
     <div className="max-w-4xl mx-auto px-8 py-10">
@@ -41,17 +45,21 @@ export default function OutreachPage() {
       <p className="text-ink-soft text-sm mb-6">Every email drafted or sent, across all your campaigns.</p>
 
       <div className="flex gap-2 mb-6 text-xs">
-        {["ALL", "QUEUED", "SENT", "BOUNCED", "FAILED"].map((s) => (
-          <button
-            key={s}
-            onClick={() => setFilter(s)}
-            className={`px-3 py-1 rounded transition-colors ${
-              filter === s ? "bg-verified-soft text-verified" : "text-ink-soft hover:text-ink"
-            }`}
-          >
-            {s}
-          </button>
-        ))}
+        {["ALL", "QUEUED", "SENT", "BOUNCED", "FAILED"].map((s) => {
+          const count = s === "ALL" ? totalCount : (counts[s] || 0);
+          return (
+            <button
+              key={s}
+              onClick={() => setFilter(s)}
+              className={`px-3 py-1 rounded transition-colors flex items-center gap-1.5 ${
+                filter === s ? "bg-verified-soft text-verified" : "text-ink-soft hover:text-ink"
+              }`}
+            >
+              <span>{s}</span>
+              <span className="font-mono opacity-70">{count}</span>
+            </button>
+          );
+        })}
       </div>
 
       {sends === null ? (
