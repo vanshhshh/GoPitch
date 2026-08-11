@@ -1,0 +1,1 @@
+ALTER TABLE users ADD COLUMN IF NOT EXISTS gmail_watch_cursor TIMESTAMPTZ;
