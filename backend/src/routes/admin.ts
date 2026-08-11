@@ -4,6 +4,7 @@ import multer from "multer";
 import { pool } from "../lib/db";
 import { requireAuth, requireAdmin } from "../lib/auth";
 import { publicWriteRateLimiter } from "../lib/rateLimiters";
+import { checkGmailRepliesForAllUsers } from "../services/gmailWatcher";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -420,6 +421,14 @@ adminRouter.post("/support/:id/resolve", async (req, res) => {
   );
   if (result.rows.length === 0) return res.status(404).json({ error: "Message not found." });
   res.json({ ok: true });
+});
+
+adminRouter.post("/gmail/check-replies", async (_req, res) => {
+  const results = await checkGmailRepliesForAllUsers();
+  const totalProcessed = results.reduce((sum, r) => sum + r.processed, 0);
+  const totalReplied = results.reduce((sum, r) => sum + r.replied, 0);
+  const allErrors = results.flatMap((r) => r.errors);
+  res.json({ usersChecked: results.length, totalProcessed, totalReplied, errors: allErrors });
 });
 
 function toInvestorResponse(row: any) {

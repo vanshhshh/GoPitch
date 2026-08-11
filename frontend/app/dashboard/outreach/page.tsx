@@ -15,14 +15,16 @@ interface Send {
   status: string;
   sentAt: string | null;
   bouncedAt: string | null;
+  repliedAt: string | null;
 }
 
 const STATUS_STYLE: Record<string, string> = {
   QUEUED: "bg-line-soft text-ink-soft",
   SENT: "bg-verified-soft text-verified",
+  REPLIED: "bg-signal-soft text-signal",
   BOUNCED: "bg-danger-soft text-danger",
   FAILED: "bg-danger-soft text-danger",
-  SKIPPED_CAP_REACHED: "bg-signal-soft text-signal",
+  SKIPPED_CAP_REACHED: "bg-line-soft text-ink-soft",
 };
 
 export default function OutreachPage() {
@@ -45,7 +47,7 @@ export default function OutreachPage() {
       <p className="text-ink-soft text-sm mb-6">Every email drafted or sent, across all your campaigns.</p>
 
       <div className="flex gap-2 mb-6 text-xs">
-        {["ALL", "QUEUED", "SENT", "BOUNCED", "FAILED"].map((s) => {
+        {["ALL", "QUEUED", "SENT", "REPLIED", "BOUNCED", "FAILED"].map((s) => {
           const count = s === "ALL" ? totalCount : (counts[s] || 0);
           return (
             <button

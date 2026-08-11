@@ -27,6 +27,7 @@ export interface DeliveryResult {
   delivered: boolean;
   via: "gmail_api" | "smtp_fallback" | "none";
   messageId?: string | undefined;
+  threadId?: string | undefined;
   error?: string | undefined;
 }
 
@@ -64,7 +65,12 @@ export async function sendViaGmailApi(userId: string, email: OutboundEmail, from
       userId: "me",
       requestBody: { raw },
     });
-    return { delivered: true, via: "gmail_api", messageId: response.data.id ?? undefined };
+    return {
+      delivered: true,
+      via: "gmail_api",
+      messageId: response.data.id ?? undefined,
+      threadId: response.data.threadId ?? undefined,
+    };
   } catch (err: any) {
     return { delivered: false, via: "gmail_api", error: err?.message || "Gmail API send failed." };
   }

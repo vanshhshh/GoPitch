@@ -13,6 +13,7 @@ interface Profile {
   connectedGmailAddress: string | null;
   sendReputationScore: number;
   complaintReportedAt: string | null;
+  gmailGrantedScopes: string | null;
 }
 
 interface Company {
@@ -172,9 +173,16 @@ function SettingsContent() {
                 <span className="text-danger"> · Sending paused (spam complaint) — contact support.</span>
               )}
             </p>
-            <button className="btn-secondary" onClick={disconnectGmail} disabled={disconnecting}>
-              {disconnecting ? "Disconnecting…" : "Disconnect Gmail"}
-            </button>
+            <div className="flex gap-2">
+              <button className="btn-secondary" onClick={disconnectGmail} disabled={disconnecting}>
+                {disconnecting ? "Disconnecting…" : "Disconnect Gmail"}
+              </button>
+              {!profile.gmailGrantedScopes?.includes("gmail.modify") && (
+                <button className="btn-primary" onClick={connectGmail}>
+                  Update Gmail permissions
+                </button>
+              )}
+            </div>
           </div>
         ) : (
           <div>

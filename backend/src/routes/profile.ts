@@ -9,7 +9,7 @@ profileRouter.use(requireAuth);
 profileRouter.get("/me", async (req, res) => {
   const result = await pool.query(
     `SELECT id, email, name, role, gmail_connected_at, connected_gmail_address, google_refresh_token,
-            send_reputation_score, account_age_days, complaint_reported_at, created_at
+            send_reputation_score, account_age_days, complaint_reported_at, created_at, gmail_granted_scopes
      FROM users WHERE id = $1`,
     [req.auth!.userId]
   );
@@ -27,6 +27,7 @@ profileRouter.get("/me", async (req, res) => {
     accountAgeDays: u.account_age_days,
     complaintReportedAt: u.complaint_reported_at,
     createdAt: u.created_at,
+    gmailGrantedScopes: u.gmail_granted_scopes,
   });
 });
 

@@ -110,6 +110,9 @@ sendRouter.get("/", async (req, res) => {
       scheduledFor: r.scheduled_for,
       sentAt: r.sent_at,
       bouncedAt: r.bounced_at,
+      repliedAt: r.replied_at,
+      gmailMessageId: r.gmail_message_id,
+      gmailThreadId: r.gmail_thread_id,
     }))
   );
 });
@@ -211,8 +214,8 @@ sendRouter.post("/campaigns/:campaignId/dispatch", async (req, res) => {
 
     if (result.delivered) {
       await pool.query(
-        `UPDATE email_sends SET status = 'SENT', sent_at = now(), gmail_message_id = $1 WHERE id = $2`,
-        [result.messageId ?? null, send.id]
+        `UPDATE email_sends SET status = 'SENT', sent_at = now(), gmail_message_id = $1, gmail_thread_id = $2 WHERE id = $3`,
+        [result.messageId ?? null, result.threadId ?? null, send.id]
       );
       await pool.query(
         "UPDATE users SET send_reputation_score = LEAST(1.0, send_reputation_score + 0.01) WHERE id = $1",

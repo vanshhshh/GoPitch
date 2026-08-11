@@ -16,6 +16,7 @@ import { profileRouter } from "./routes/profile";
 import { leadsRouter } from "./routes/leads";
 import { authRateLimiter, generalRateLimiter } from "./lib/rateLimiters";
 import { assertRefreshTokenEncryptionKeyConfigured } from "./lib/tokenEncryption";
+import { checkGmailRepliesForAllUsers } from "./services/gmailWatcher";
 
 dotenv.config();
 assertRefreshTokenEncryptionKeyConfigured();
@@ -78,5 +79,22 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 
 if (require.main === module) {
   const port = Number(process.env.PORT) || 4000;
-  app.listen(port, () => console.log(`GoPitch API listening on :${port}`));
+  const server = app.listen(port, () => console.log(`GoPitch API listening on :${port}`));
+
+  if (process.env.GMAIL_WATCHER_ENABLED !== "false") {
+    const WATCH_INTERVAL_MS = 15 * 60 * 1000;
+    const runWatcher = async () => {
+      try {
+        await checkGmailRepliesForAllUsers();
+      } catch (err) {
+        console.error("Gmail watcher error:", err);
+      }
+    };
+    runWatcher();
+    setInterval(runWatcher, WATCH_INTERVAL_MS);
+    console.log(`Gmail reply watcher started (every ${WATCH_INTERVAL_MS / 1000 / 60} minutes)`);
+  }
+
+  process.on("SIGTERM", () => server.close(() => process.exit(0)));
+  process.on("SIGINT", () => server.close(() => process.exit(0)));
 }

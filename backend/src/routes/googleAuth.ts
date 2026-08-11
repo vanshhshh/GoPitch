@@ -14,9 +14,15 @@ function getOAuthClient(redirectUri?: string) {
   );
 }
 
-const GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
+const GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
 const USERINFO_EMAIL_SCOPE = "https://www.googleapis.com/auth/userinfo.email";
 const GOOGLE_SIGNIN_SCOPES = ["openid", "email", "profile"];
+const GMAIL_LEGACY_SCOPE = "https://www.googleapis.com/auth/gmail.send";
+
+function getGmailScope(): string {
+  const mode = (process.env.GMAIL_OAUTH_SCOPE || "modify").toLowerCase();
+  return mode === "send" ? GMAIL_LEGACY_SCOPE : GMAIL_MODIFY_SCOPE;
+}
 
 const oauthStateStore = new Map<string, number>();
 
@@ -39,16 +45,16 @@ googleAuthRouter.get("/auth/google/init", (req, res) => {
   if (!token) return res.status(400).json({ error: "Missing token query param." });
 
   try {
-    verifyToken(token); // fail fast with a clear error rather than discovering it at the callback
+    verifyToken(token);
   } catch {
     return res.status(401).json({ error: "Invalid or expired session — log in again before connecting Gmail." });
   }
 
   const client = getOAuthClient(process.env.GOOGLE_REDIRECT_URI);
   const url = client.generateAuthUrl({
-    access_type: "offline", // required to receive a refresh_token, not just a short-lived access_token
-    prompt: "consent", // forces Google to re-issue a refresh_token even on repeat connects
-    scope: [GMAIL_SEND_SCOPE, USERINFO_EMAIL_SCOPE],
+    access_type: "offline",
+    prompt: "consent",
+    scope: [getGmailScope(), USERINFO_EMAIL_SCOPE],
     state: token,
   });
 
@@ -88,6 +94,8 @@ googleAuthRouter.get("/auth/google/callback", async (req, res) => {
       return res.redirect(`${frontendUrl}/dashboard/settings?gmail_error=no_refresh_token`);
     }
 
+    const grantedScopes = Array.isArray(tokens.scope) ? tokens.scope.join(" ") : tokens.scope || null;
+
     const update = await pool.query(
       `UPDATE users SET
         google_refresh_token = $1,
@@ -95,13 +103,15 @@ googleAuthRouter.get("/auth/google/callback", async (req, res) => {
         google_token_expiry = $3,
         gmail_connected_at = now(),
         connected_gmail_address = $4,
-        account_age_days = 0
-       WHERE id = $5`,
+        account_age_days = 0,
+        gmail_granted_scopes = $5
+       WHERE id = $6`,
       [
         encryptedRefreshToken,
         tokens.access_token ?? null,
         tokens.expiry_date ? new Date(tokens.expiry_date) : null,
         profile.email,
+        grantedScopes,
         auth.userId,
       ]
     );
@@ -201,15 +211,27 @@ googleAuthRouter.get("/auth/google/signin/callback", async (req, res) => {
   }
 });
 
-/** Lets a founder disconnect Gmail — clears stored tokens, does not revoke at Google's end
- * (that's a separate explicit action since revoking also affects other apps using the same grant). */
+/** Lets a founder disconnect Gmail — clears stored tokens, does not revoke at Google's end */
 export async function disconnectGmail(userId: string) {
   await pool.query(
     `UPDATE users SET google_refresh_token = NULL, google_access_token = NULL,
-      google_token_expiry = NULL, gmail_connected_at = NULL, connected_gmail_address = NULL
+      google_token_expiry = NULL, gmail_connected_at = NULL, connected_gmail_address = NULL,
+      gmail_granted_scopes = NULL
      WHERE id = $1`,
     [userId]
   );
+}
+
+export function userHasGmailModifyScope(grantedScopes: string | null | undefined): boolean {
+  if (!grantedScopes) return false;
+  const scopes = grantedScopes.split(" ").filter(Boolean);
+  return scopes.includes(GMAIL_MODIFY_SCOPE);
+}
+
+export function isInsufficientGmailScopeError(err: any): boolean {
+  if (!err) return false;
+  const message = err?.message || err?.errors?.[0]?.message || "";
+  return message.includes("insufficient") || message.includes("scope") || message.includes("403");
 }
 
 /**
