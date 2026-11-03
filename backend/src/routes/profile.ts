@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { requireAuth } from "../lib/auth";
+import { requireAuth, hashPassword, verifyPassword } from "../lib/auth";
 import { pool } from "../lib/db";
 import { buildGmailConsentUrl, confirmGmailConnection, disconnectGmail, userHasReplyTrackingScope } from "./googleAuth";
 
@@ -10,7 +10,7 @@ profileRouter.use(requireAuth);
 profileRouter.get("/me", async (req, res) => {
   const result = await pool.query(
     `SELECT id, email, name, role, gmail_connected_at, connected_gmail_address, google_refresh_token,
-            send_reputation_score, account_age_days, complaint_reported_at, created_at, gmail_granted_scopes
+            send_reputation_score, account_age_days, complaint_reported_at, created_at, gmail_granted_scopes, password_hash
      FROM users WHERE id = $1`,
     [req.auth!.userId]
   );
@@ -30,6 +30,7 @@ profileRouter.get("/me", async (req, res) => {
     accountAgeDays: u.account_age_days,
     complaintReportedAt: u.complaint_reported_at,
     createdAt: u.created_at,
+    hasPassword: !!u.password_hash,
     gmailGrantedScopes: u.gmail_granted_scopes,
   });
 });
@@ -72,6 +73,29 @@ profileRouter.post("/gmail/confirm", async (req, res) => {
     return res.status(status).json({ error, reason: result.reason });
   }
   res.json({ ok: true, connectedGmailAddress: result.gmailAddress });
+});
+
+const passwordSchema = z.object({
+  currentPassword: z.string().max(128).optional(),
+  newPassword: z
+    .string()
+    .min(8, "Password must be at least 8 characters.")
+    .max(128)
+    .refine((p) => /[A-Za-z]/.test(p) && /[0-9]/.test(p), "Password must contain at least one letter and one number."),
+});
+
+/** Change password (or set one, for accounts created with Google Sign-In). */
+profileRouter.post("/password", async (req, res) => {
+  const parsed = passwordSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message });
+  const user = (await pool.query("SELECT password_hash FROM users WHERE id = $1", [req.auth!.userId])).rows[0];
+  if (user?.password_hash) {
+    if (!parsed.data.currentPassword || !(await verifyPassword(parsed.data.currentPassword, user.password_hash))) {
+      return res.status(400).json({ error: "Your current password is incorrect." });
+    }
+  }
+  await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [await hashPassword(parsed.data.newPassword), req.auth!.userId]);
+  res.json({ ok: true });
 });
 
 profileRouter.post("/disconnect-gmail", async (req, res) => {

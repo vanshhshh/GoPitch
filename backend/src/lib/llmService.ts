@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 
-export type AIFeature = "deck" | "email" | "match";
+export type AIFeature = "deck" | "email" | "match" | "profile";
 export type AIProviderId = "anthropic" | "claude" | "gemini" | "groq" | "openrouter" | "openai" | "custom" | "mock";
 
 const DEFAULT_MODEL_BY_PROVIDER: Record<AIProviderId, string> = {
@@ -206,7 +206,7 @@ Problem: ${answers.problem}
 Solution: ${answers.solution}
 Stage: ${answers.stage}
 Sector: ${answers.sector.join(", ")}
-Ask: $${answers.askAmountUsd.toLocaleString()}
+Ask: $${answers.askAmountUsd.toLocaleString("en-US")}
 Traction: ${answers.traction || "Not yet provided"}
 Founder background: ${answers.founderBackground || "Not yet provided"}`;
 
@@ -219,7 +219,7 @@ export async function generatePersonalizedEmail(input: PersonalizedEmailInput): 
 
   const userPrompt = `Founder: ${input.founderName}
 Company: ${input.companyName} - ${input.oneLiner}
-Ask: $${input.askAmountUsd.toLocaleString()}
+Ask: $${input.askAmountUsd.toLocaleString("en-US")}
 Investor: ${input.investorName} at ${input.investorFirm}
 Why this investor is a fit: ${input.matchReasons.join("; ")}`;
 
@@ -423,4 +423,10 @@ function validateDeckSections(sections: DeckSections) {
 
 function isKnownProvider(provider: AIProviderId): provider is AIProviderId {
   return ["anthropic", "claude", "gemini", "groq", "openrouter", "openai", "custom", "mock"].includes(provider);
+}
+
+/** Generic structured completion for features that validate their own JSON (company intelligence). */
+export async function completeStructured<T>(feature: AIFeature, system: string, userPrompt: string, parse: (text: string) => T) {
+  const completion = await aiRouter.completeJson(feature, system, userPrompt, (raw) => parse(stripFences(raw)));
+  return { value: completion.value, provider: completion.provider };
 }

@@ -22,6 +22,14 @@ interface Investor {
   thesisKeywords: string[];
   isVerified: boolean;
   needsEnrichment: boolean;
+  investorType: string | null;
+  subSectors: string[];
+  businessModels: string[];
+  leadsRounds: boolean | null;
+  fundStatus: "ACTIVE" | "NOT_INVESTING" | "UNKNOWN";
+  tractionRequirement: "PRE_REVENUE_OK" | "REVENUE_REQUIRED" | null;
+  founderPreferences: string[];
+  fundDescription: string | null;
 }
 
 type Filter = "unverified" | "enrichment" | "matchable" | "all";
@@ -256,7 +264,16 @@ function InvestorForm({
     checkSizeMinUsd: initial?.checkSizeMinUsd?.toString() ?? "",
     checkSizeMaxUsd: initial?.checkSizeMaxUsd?.toString() ?? "",
     thesisKeywords: initial?.thesisKeywords.join(", ") ?? "",
+    investorType: initial?.investorType ?? "",
+    subSectors: initial?.subSectors?.join(", ") ?? "",
+    businessModels: initial?.businessModels?.join(", ") ?? "",
+    leadsRounds: initial?.leadsRounds == null ? "" : initial.leadsRounds ? "yes" : "no",
+    fundStatus: initial?.fundStatus ?? "UNKNOWN",
+    tractionRequirement: initial?.tractionRequirement ?? "",
+    founderPreferences: initial?.founderPreferences?.join(", ") ?? "",
+    fundDescription: initial?.fundDescription ?? "",
   });
+  const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
   const [saving, setSaving] = useState(false);
 
   async function submit(e: React.FormEvent) {
@@ -274,6 +291,15 @@ function InvestorForm({
       checkSizeMinUsd: form.checkSizeMinUsd ? Number(form.checkSizeMinUsd) : null,
       checkSizeMaxUsd: form.checkSizeMaxUsd ? Number(form.checkSizeMaxUsd) : null,
       thesisKeywords: form.thesisKeywords.split(",").map((s) => s.trim()).filter(Boolean),
+      // Matching v2 enrichment — each field left empty is reported to founders as "no data", never guessed.
+      investorType: form.investorType || null,
+      subSectors: list(form.subSectors),
+      businessModels: list(form.businessModels).map((b) => b.toUpperCase()),
+      leadsRounds: form.leadsRounds === "" ? null : form.leadsRounds === "yes",
+      fundStatus: form.fundStatus,
+      tractionRequirement: form.tractionRequirement || null,
+      founderPreferences: list(form.founderPreferences),
+      fundDescription: form.fundDescription || null,
     };
     try {
       if (initial) {
@@ -291,7 +317,7 @@ function InvestorForm({
   }
 
   return (
-    <form onSubmit={submit} className="card p-5 mb-6 grid grid-cols-2 gap-3 animate-fade-up">
+    <form onSubmit={submit} className="card p-5 mb-6 grid grid-cols-1 sm:grid-cols-2 gap-3 animate-fade-up">
       <input required placeholder="Name" className="input-field" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
       <input required placeholder="Firm" className="input-field" value={form.firm} onChange={(e) => setForm({ ...form, firm: e.target.value })} />
       <input required type="email" placeholder="Email" className="input-field col-span-2" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
@@ -303,6 +329,34 @@ function InvestorForm({
       <input placeholder="Thesis keywords" className="input-field" value={form.thesisKeywords} onChange={(e) => setForm({ ...form, thesisKeywords: e.target.value })} />
       <input placeholder="Check size min USD" type="number" className="input-field" value={form.checkSizeMinUsd} onChange={(e) => setForm({ ...form, checkSizeMinUsd: e.target.value })} />
       <input placeholder="Check size max USD" type="number" className="input-field" value={form.checkSizeMaxUsd} onChange={(e) => setForm({ ...form, checkSizeMaxUsd: e.target.value })} />
+      <p className="col-span-2 label pt-2">Matching v2 enrichment</p>
+      <select className="input-field" aria-label="Investor type" value={form.investorType} onChange={(e) => setForm({ ...form, investorType: e.target.value })}>
+        <option value="">Investor type: unknown</option>
+        {["VC", "MICRO_VC", "ANGEL", "ANGEL_NETWORK", "CVC", "ACCELERATOR", "FAMILY_OFFICE", "SYNDICATE", "OTHER"].map((t) => (
+          <option key={t} value={t}>
+            {t.replace(/_/g, " ")}
+          </option>
+        ))}
+      </select>
+      <select className="input-field" aria-label="Fund status" value={form.fundStatus} onChange={(e) => setForm({ ...form, fundStatus: e.target.value as any })}>
+        <option value="UNKNOWN">Fund status: unknown</option>
+        <option value="ACTIVE">Actively investing</option>
+        <option value="NOT_INVESTING">Not investing (excluded from matches)</option>
+      </select>
+      <input placeholder="Sub-sectors (cross-border payments)" className="input-field" value={form.subSectors} onChange={(e) => setForm({ ...form, subSectors: e.target.value })} />
+      <input placeholder="Business models (SAAS, MARKETPLACE)" className="input-field" value={form.businessModels} onChange={(e) => setForm({ ...form, businessModels: e.target.value })} />
+      <select className="input-field" aria-label="Leads rounds" value={form.leadsRounds} onChange={(e) => setForm({ ...form, leadsRounds: e.target.value })}>
+        <option value="">Leads rounds: unknown</option>
+        <option value="yes">Leads rounds</option>
+        <option value="no">Usually follows</option>
+      </select>
+      <select className="input-field" aria-label="Traction requirement" value={form.tractionRequirement} onChange={(e) => setForm({ ...form, tractionRequirement: e.target.value as any })}>
+        <option value="">Traction requirement: unknown</option>
+        <option value="PRE_REVENUE_OK">Backs pre-revenue</option>
+        <option value="REVENUE_REQUIRED">Requires revenue</option>
+      </select>
+      <input placeholder="Founder preferences (technical, repeat)" className="input-field col-span-2" value={form.founderPreferences} onChange={(e) => setForm({ ...form, founderPreferences: e.target.value })} />
+      <textarea placeholder="Fund description (shown on the fund page)" className="input-field col-span-2" rows={2} value={form.fundDescription} onChange={(e) => setForm({ ...form, fundDescription: e.target.value })} />
       <div className="col-span-2 flex gap-2">
         <button className="btn-primary" disabled={saving}>
           {saving ? "Saving…" : initial ? "Save changes" : "Add investor"}

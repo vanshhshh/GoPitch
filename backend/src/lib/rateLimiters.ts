@@ -18,7 +18,8 @@ export const authRateLimiter = rateLimit({
  * constrain normal interactive use. */
 export const generalRateLimiter = rateLimit({
   windowMs: 60 * 1000,
-  limit: 120,
+  // Overridable for load tests / local E2E runs where every request shares one IP.
+  limit: Number(process.env.GENERAL_RATE_LIMIT_PER_MIN) || 120,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests. Slow down." },

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
+import { Breadcrumbs } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
 
 interface Template {
@@ -25,6 +26,7 @@ export default function TemplatesPage() {
 
   return (
     <div className="max-w-3xl mx-auto px-4 sm:px-8 py-10">
+      <Breadcrumbs items={[{ label: "Outreach", href: "/dashboard/outreach" }, { label: "Templates" }]} />
       <div className="flex items-center justify-between mb-1">
         <h1 className="font-display text-2xl">Email templates</h1>
         {!showForm && (
@@ -40,8 +42,9 @@ export default function TemplatesPage() {
         )}
       </div>
       <p className="text-ink-soft text-sm mb-8">
-        Reusable starting points for your own manual follow-ups. Campaign outreach emails are
-        still generated per-investor from real match reasoning — templates don't replace that.
+        Choose a template when creating a campaign instead of AI drafting. Merge fields:{" "}
+        <code className="text-xs">{"{{investorName}} {{firm}} {{companyName}} {{founderName}} {{matchReason}} {{askAmount}}"}</code>. Every draft can
+        still be edited before sending.
       </p>
 
       {showForm && (

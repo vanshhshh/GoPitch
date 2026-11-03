@@ -46,6 +46,12 @@ async function loadSendState(userId: string, userRow: any, db: Queryable = pool)
   };
 }
 
+/** Today's enforced sending capacity for a user (same calculation dispatch uses). */
+export async function sendingCapacity(userId: string, db: Queryable = pool) {
+  const userRow = (await db.query("SELECT * FROM users WHERE id = $1", [userId])).rows[0];
+  return evaluateSend(await loadSendState(userId, userRow, db));
+}
+
 /** Aggregate stats for the founder's own Analytics dashboard — real counts, not estimates. */
 sendRouter.get("/analytics", async (req, res) => {
   const userId = req.auth!.userId;
@@ -71,7 +77,21 @@ sendRouter.get("/analytics", async (req, res) => {
     await pool.query("SELECT gmail_granted_scopes FROM users WHERE id = $1", [userId])
   ).rows[0]?.gmail_granted_scopes;
 
+  const byCampaign = (
+    await pool.query(
+      `SELECT c.id, c.name, c.status, comp.name AS company_name,
+              COUNT(es.id) FILTER (WHERE es.status <> 'CANCELLED')::int AS drafted,
+              COUNT(es.id) FILTER (WHERE es.sent_at IS NOT NULL)::int AS sent,
+              COUNT(es.id) FILTER (WHERE es.status = 'REPLIED')::int AS replied,
+              COUNT(es.id) FILTER (WHERE es.status = 'BOUNCED')::int AS bounced
+       FROM campaigns c JOIN companies comp ON comp.id = c.company_id LEFT JOIN email_sends es ON es.campaign_id = c.id
+       WHERE c.user_id = $1 GROUP BY c.id, comp.name ORDER BY c.created_at DESC LIMIT 50`,
+      [userId]
+    )
+  ).rows.map((r) => ({ id: r.id, name: r.name, status: r.status, companyName: r.company_name, drafted: r.drafted, sent: r.sent, replied: r.replied, bounced: r.bounced }));
+
   res.json({
+    byCampaign,
     sendsByStatus,
     totals: {
       drafted: Object.values(sendsByStatus).reduce((a, b) => a + b, 0),

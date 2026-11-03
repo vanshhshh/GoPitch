@@ -8,7 +8,7 @@
     @apply bg-paper text-ink font-sans antialiased;
   }
   h1, h2, h3 {
-    @apply font-display;
+    @apply font-display text-navy;
   }
   /* Visible keyboard focus everywhere — accessibility floor, not optional polish */
   :focus-visible {
@@ -44,5 +44,20 @@
   }
   .label {
     @apply text-xs font-medium text-ink-soft uppercase tracking-wide;
+  }
+  .btn-ghost {
+    @apply text-ink-soft px-3 py-2 rounded text-sm font-medium hover:text-ink hover:bg-surface-muted transition-colors
+           disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-danger {
+    @apply bg-danger text-white px-4 py-2 rounded font-medium text-sm hover:opacity-90 transition-opacity
+           disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full border border-line bg-surface text-ink-soft;
+  }
+  /* Touch targets: buttons and inputs are at least 40px tall on touch screens. */
+  @media (pointer: coarse) {
+    .btn-primary, .btn-secondary, .btn-ghost, .btn-danger, .input-field { min-height: 40px; }
   }
 }

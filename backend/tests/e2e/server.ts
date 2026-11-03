@@ -31,6 +31,8 @@ Object.assign(process.env, {
   OPENROUTER_API_KEY: "",
   ANTHROPIC_API_KEY: "",
   DATABASE_URL: "",
+  PROFILE_PROVIDER_PRIORITY: "mock",
+  GENERAL_RATE_LIMIT_PER_MIN: "5000",
 });
 
 const src = (p: string) => require.resolve(path.join(__dirname, "..", "..", "src", p));
@@ -58,18 +60,54 @@ async function main() {
     ...realLlm,
     isAIFeatureAvailable: () => true,
     generatePersonalizedEmail: async (i: any) => ({
-      subject: `${i.companyName} — raising $${i.askAmountUsd.toLocaleString()}`,
+      subject: `${i.companyName} — raising $${i.askAmountUsd.toLocaleString("en-US")}`,
       body: `Hi ${i.investorName},\n\n${i.companyName}: ${i.oneLiner}. ${i.matchReasons[0] ?? ""}.\n\nBest,\n${i.founderName}`,
       provider: "mock",
     }),
+    // Deterministic stand-in for the AI profile summary: classifies only from the input.
+    completeStructured: async (_feature: string, _system: string, input: string, parse: (t: string) => unknown) => {
+      const data = JSON.parse(input);
+      const sectors: string[] = data.company?.sector ?? [];
+      return {
+        provider: "mock",
+        value: parse(
+          JSON.stringify({
+            fields: {
+              industry: { value: sectors.join(", "), basis: "AI_CLASSIFICATION" },
+              founderMarketFit: { value: "Founder experience is in the same domain as the product.", basis: "INFERRED" },
+            },
+            thesisCategories: sectors.map((s) => ({ value: s, basis: "AI_CLASSIFICATION" })),
+            missingInformation: [],
+            inconsistencies: [],
+          })
+        ),
+      };
+    },
   });
 
   const { pool } = testDb;
+  // Synthetic, clearly-fake investors (example.test) — some enriched with v2 fields.
+  const titles = ["Partner", "Principal", "Associate", "General Partner"];
   for (let i = 0; i < 60; i++) {
+    const enriched = i % 2 === 0;
     await pool.query(
-      `INSERT INTO investors (name, firm, email, stage_focus, sector_focus, geo_focus, check_size_min_usd, check_size_max_usd, is_verified, needs_enrichment)
-       VALUES ($1, $2, $3, '{SEED,PRE_SEED}', $4, '{India}', 100000, 2000000, true, false)`,
-      [`Investor ${i + 1}`, `Example Fund ${(i % 12) + 1}`, `investor${i + 1}@example.test`, i % 3 === 0 ? ["Fintech", "SaaS"] : ["Fintech"]]
+      `INSERT INTO investors (name, firm, email, title, stage_focus, sector_focus, geo_focus, check_size_min_usd, check_size_max_usd, thesis_keywords,
+         is_verified, needs_enrichment, investor_type, business_models, fund_status, traction_requirement, founder_preferences, fund_description)
+       VALUES ($1, $2, $3, $4, '{SEED,PRE_SEED}', $5, '{India}', 100000, 2000000, $6, true, false, $7, $8, $9, $10, $11, $12)`,
+      [
+        `Investor ${i + 1}`,
+        `Example Fund ${(i % 12) + 1}`,
+        `investor${i + 1}@example.test`,
+        titles[i % titles.length],
+        i % 3 === 0 ? ["Fintech", "SaaS"] : ["Fintech"],
+        ["payments", "fintech"],
+        enriched ? (i % 4 === 0 ? "VC" : "MICRO_VC") : null,
+        enriched ? ["SAAS", "B2B"] : [],
+        enriched ? "ACTIVE" : "UNKNOWN",
+        enriched ? "PRE_REVENUE_OK" : null,
+        enriched ? ["technical"] : [],
+        `Example Fund ${(i % 12) + 1} is a synthetic test fund backing early-stage fintech.`,
+      ]
     );
   }
   const { hashPassword } = require(src("lib/auth"));

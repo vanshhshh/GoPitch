@@ -1,159 +1,214 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { Send } from "lucide-react";
 import { api, errorMessage } from "@/lib/api";
-import { MatchStamp } from "@/components/MatchStamp";
+import { useWorkspace } from "@/lib/workspace";
+import { EmptyState, ErrorState, LoadingSkeleton, Page, PageHeader, ProgressBar, ScorePill, StatusBadge, Tabs } from "@/components/ui";
+import { DataTable } from "@/components/ui/overlays";
 import { Pagination } from "@/components/Pagination";
+import { Quota, SendingConfig } from "@/components/outreach/shared";
 
-interface Send {
+interface Campaign {
   id: string;
-  investorName: string;
-  investorFirm: string;
+  companyId: string;
   companyName: string;
-  subject: string;
-  matchScore: number;
-  status: string;
-  failureReason: string | null;
-  sentAt: string | null;
-  bouncedAt: string | null;
-  repliedAt: string | null;
+  name: string | null;
+  status: "DRAFT" | "ACTIVE" | "PAUSED" | "COMPLETED" | "CANCELLED";
+  createdAt: string;
+  launchedAt: string | null;
+  counts: { total: number; queued: number; sent: number; failed: number; bounced: number; replied: number };
 }
 
-interface SendPage {
-  items: Send[];
-  total: number;
-  page: number;
-  pageSize: number;
-  counts: Record<string, number>;
-}
-
-const STATUS_STYLE: Record<string, string> = {
-  QUEUED: "bg-line-soft text-ink-soft",
-  SENT: "bg-verified-soft text-verified",
-  REPLIED: "bg-signal-soft text-signal",
-  BOUNCED: "bg-danger-soft text-danger",
-  FAILED: "bg-danger-soft text-danger",
-  CANCELLED: "bg-line-soft text-ink-soft",
-  SKIPPED_CAP_REACHED: "bg-line-soft text-ink-soft",
-};
-
-const FILTERS = ["ALL", "QUEUED", "SENT", "REPLIED", "BOUNCED", "FAILED", "CANCELLED"] as const;
-const LABELS: Record<string, string> = { ALL: "All", QUEUED: "Queued", SENT: "Sent", REPLIED: "Replied", BOUNCED: "Bounced", FAILED: "Failed", CANCELLED: "Cancelled" };
+const CAMPAIGN_TABS = [
+  { key: "all", label: "All campaigns", match: () => true },
+  { key: "draft", label: "Drafts", match: (c: Campaign) => c.status === "DRAFT" },
+  { key: "active", label: "Active", match: (c: Campaign) => c.status === "ACTIVE" || c.status === "PAUSED" },
+  { key: "completed", label: "Completed", match: (c: Campaign) => c.status === "COMPLETED" || c.status === "CANCELLED" },
+];
 
 export default function OutreachPage() {
   return (
-    <Suspense fallback={<div className="max-w-4xl mx-auto px-4 sm:px-8 py-10 text-ink-soft text-sm">Loading…</div>}>
+    <Suspense fallback={<Page><LoadingSkeleton /></Page>}>
       <Outreach />
     </Suspense>
   );
 }
 
 function Outreach() {
-  const campaignId = useSearchParams().get("campaignId");
-  const [filter, setFilter] = useState<(typeof FILTERS)[number]>("ALL");
-  const [page, setPage] = useState(1);
-  const [data, setData] = useState<SendPage | null>(null);
+  const params = useSearchParams();
+  const tab = params.get("tab") ?? "all";
+  const { companyId } = useWorkspace();
+  const [campaigns, setCampaigns] = useState<Campaign[] | null>(null);
+  const [quota, setQuota] = useState<Quota | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    const params = new URLSearchParams({ status: filter, page: String(page), pageSize: "25" });
-    if (campaignId) params.set("campaignId", campaignId);
-    api
-      .get<SendPage>(`/api/sends?${params}`)
-      .then((d) => !cancelled && (setData(d), setError(null)))
-      .catch((err) => !cancelled && setError(errorMessage(err, "Couldn't load outreach.")))
-      .finally(() => !cancelled && setLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [filter, page, campaignId]);
+  const load = useCallback(() => {
+    setError(null);
+    api.get<Campaign[]>("/api/campaigns").then(setCampaigns).catch((err) => setError(errorMessage(err, "Couldn't load campaigns.")));
+    api.get<Quota>("/api/sends/quota").then(setQuota).catch(() => {});
+  }, []);
+  useEffect(load, [load]);
 
-  const counts = data?.counts ?? {};
-  // "Sent" = every email that left your outbox, including those later replied to or bounced.
-  const everSent = (counts.SENT ?? 0) + (counts.REPLIED ?? 0) + (counts.BOUNCED ?? 0);
-  const all = Object.values(counts).reduce((a, b) => a + b, 0);
+  const scoped = campaigns?.filter((c) => !companyId || c.companyId === companyId) ?? null;
+  const tabs = [
+    ...CAMPAIGN_TABS.map((t) => ({ key: t.key, label: t.label, href: `/dashboard/outreach?tab=${t.key}`, count: scoped?.filter(t.match).length })),
+    { key: "activity", label: "Email activity", href: "/dashboard/outreach?tab=activity" },
+    { key: "templates", label: "Templates", href: "/dashboard/outreach/templates" },
+  ];
 
   return (
-    <div className="max-w-4xl mx-auto px-4 sm:px-8 py-10">
-      <h1 className="font-display text-2xl mb-1">Outreach</h1>
-      <p className="text-ink-soft text-sm mb-2">
-        Every email drafted for your campaigns. A campaign drafts emails only for the investors selected for it (your best matches, up to your plan
-        allowance) — so this is usually fewer than your total matches.
-      </p>
-      {data && (
-        <p className="text-xs text-ink-soft mb-6 font-mono">
-          {all} drafted · {everSent} sent · {counts.QUEUED ?? 0} queued · {counts.FAILED ?? 0} failed
-        </p>
-      )}
-      {campaignId && (
-        <p className="text-xs mb-4">
-          Showing one campaign ·{" "}
-          <Link href="/dashboard/outreach" className="text-verified hover:underline">
-            show all campaigns
+    <Page>
+      <PageHeader
+        title="Outreach"
+        description="Select investors → review drafts → launch → send in safe daily batches from your own Gmail."
+        actions={
+          <Link href="/dashboard/outreach/new" className="btn-primary">
+            New campaign
           </Link>
+        }
+      />
+      <Tabs label="Outreach views" active={tab} tabs={tabs} />
+      {tab === "activity" ? (
+        <EmailActivity />
+      ) : (
+        <div className="grid lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2">
+            {error ? (
+              <ErrorState message={error} onRetry={load} />
+            ) : !scoped ? (
+              <LoadingSkeleton rows={3} />
+            ) : scoped.filter(CAMPAIGN_TABS.find((t) => t.key === tab)!.match).length === 0 ? (
+              <EmptyState
+                icon={<Send size={18} />}
+                title={tab === "draft" ? "No draft campaigns" : tab === "completed" ? "No completed campaigns yet" : "No campaigns yet"}
+                description="Pick investors in Investor Discovery, then create a campaign — you'll review every draft before anything sends."
+                action={<Link href="/dashboard/investors" className="btn-primary">Find investors</Link>}
+              />
+            ) : (
+              <DataTable
+                caption="Campaigns"
+                rows={scoped.filter(CAMPAIGN_TABS.find((t) => t.key === tab)!.match)}
+                rowKey={(c) => c.id}
+                columns={[
+                  {
+                    key: "name",
+                    header: "Campaign",
+                    render: (c) => (
+                      <Link href={`/dashboard/outreach/campaigns/${c.id}`} className="text-navy font-medium hover:underline">
+                        {c.name ?? c.companyName}
+                      </Link>
+                    ),
+                  },
+                  { key: "status", header: "Status", render: (c) => <StatusBadge status={c.status} /> },
+                  {
+                    key: "progress",
+                    header: "Progress",
+                    className: "w-48",
+                    render: (c) => (
+                      <div className="min-w-[8rem]">
+                        <ProgressBar value={c.counts.total ? (c.counts.sent / c.counts.total) * 100 : 0} label={`${c.counts.sent} of ${c.counts.total} sent`} />
+                        <p className="text-[11px] text-ink-soft mt-1 font-mono">
+                          {c.counts.sent}/{c.counts.total} sent · {c.counts.queued} queued
+                        </p>
+                      </div>
+                    ),
+                  },
+                  { key: "replies", header: "Replies", hideOnMobile: true, render: (c) => <span className="font-mono">{c.counts.replied}</span> },
+                  { key: "issues", header: "Failed / bounced", hideOnMobile: true, render: (c) => <span className="font-mono">{c.counts.failed + c.counts.bounced}</span> },
+                ]}
+              />
+            )}
+          </div>
+          <aside className="card p-5 h-fit">
+            <h2 className="font-display text-lg mb-4">Sending capacity</h2>
+            {quota ? <SendingConfig quota={quota} returnTo="/dashboard/outreach" /> : <LoadingSkeleton rows={1} />}
+          </aside>
+        </div>
+      )}
+    </Page>
+  );
+}
+
+const STATUSES = ["ALL", "QUEUED", "SENT", "REPLIED", "BOUNCED", "FAILED", "CANCELLED"];
+
+function EmailActivity() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const params = useSearchParams();
+  const status = params.get("status") ?? "ALL";
+  const campaignId = params.get("campaignId");
+  const page = Number(params.get("page") ?? 1) || 1;
+  const [data, setData] = useState<{ items: any[]; total: number; page: number; pageSize: number; counts: Record<string, number> } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const set = (patch: Record<string, string | null>) => {
+    const next = new URLSearchParams(params.toString());
+    for (const [k, v] of Object.entries(patch)) (v ? next.set(k, v) : next.delete(k));
+    router.replace(`${pathname}?${next}`, { scroll: false });
+  };
+
+  useEffect(() => {
+    const qs = new URLSearchParams({ status, page: String(page), pageSize: "25" });
+    if (campaignId) qs.set("campaignId", campaignId);
+    api.get<typeof data>(`/api/sends?${qs}`).then(setData).catch((err) => setError(errorMessage(err, "Couldn't load email activity.")));
+  }, [status, page, campaignId]);
+
+  if (error) return <ErrorState message={error} />;
+  const counts = data?.counts ?? {};
+  return (
+    <div>
+      <div className="flex gap-1 overflow-x-auto mb-4 -mx-4 px-4 sm:mx-0 sm:px-0" role="group" aria-label="Filter by status">
+        {STATUSES.map((s) => (
+          <button
+            key={s}
+            aria-pressed={status === s}
+            onClick={() => set({ status: s === "ALL" ? null : s, page: null })}
+            className={`shrink-0 px-3 py-1.5 rounded text-xs transition-colors ${status === s ? "bg-verified-soft text-verified" : "text-ink-soft hover:text-ink"}`}
+          >
+            {s === "ALL" ? "All" : s.charAt(0) + s.slice(1).toLowerCase()} <span className="font-mono opacity-70">{s === "ALL" ? Object.values(counts).reduce((a, b) => a + b, 0) : counts[s] ?? 0}</span>
+          </button>
+        ))}
+      </div>
+      {campaignId && (
+        <p className="text-xs mb-3">
+          One campaign ·{" "}
+          <button className="text-verified hover:underline" onClick={() => set({ campaignId: null })}>
+            show all
+          </button>
         </p>
       )}
-
-      <div className="flex gap-1 mb-6 text-xs overflow-x-auto pb-1" role="tablist">
-        {FILTERS.map((s) => {
-          const count = s === "ALL" ? all : counts[s] ?? 0;
-          return (
-            <button
-              key={s}
-              role="tab"
-              aria-selected={filter === s}
-              onClick={() => (setFilter(s), setPage(1))}
-              className={`px-3 py-1 rounded transition-colors flex items-center gap-1.5 shrink-0 ${filter === s ? "bg-verified-soft text-verified" : "text-ink-soft hover:text-ink"}`}
-            >
-              <span>{LABELS[s]}</span>
-              <span className="font-mono opacity-70">{count}</span>
-            </button>
-          );
-        })}
-      </div>
-      {campaignId && <p className="text-[11px] text-ink-soft -mt-4 mb-4">Counts above are across all campaigns.</p>}
-
-      {error ? (
-        <div className="card p-6 text-sm text-danger">{error}</div>
-      ) : !data ? (
-        <p className="text-ink-soft text-sm">Loading…</p>
+      {!data ? (
+        <LoadingSkeleton rows={4} />
       ) : data.items.length === 0 ? (
-        <div className="card p-10 text-center">
-          <p className="text-ink-soft text-sm mb-4">{all === 0 ? "No outreach yet. Start a campaign from one of your raises." : "No emails in this view."}</p>
-          {all === 0 && (
-            <Link href="/dashboard" className="btn-primary inline-block">
-              Go to your raises
-            </Link>
-          )}
-        </div>
+        <EmptyState title="No emails here" description={status === "ALL" ? "Emails appear once you create a campaign." : "No emails with this status."} />
       ) : (
         <>
-          <div className={`card divide-y divide-line-soft animate-fade-up ${loading ? "opacity-60" : ""}`}>
-            {data.items.map((s) => (
-              <div key={s.id} className="p-4 flex items-center gap-4">
-                <MatchStamp score={s.matchScore} size={32} />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{s.subject}</p>
-                  <p className="text-xs text-ink-soft truncate">
-                    {s.investorName} · {s.investorFirm} — for {s.companyName}
-                  </p>
-                  {s.status === "FAILED" && s.failureReason && <p className="text-xs text-danger truncate">{s.failureReason}</p>}
-                </div>
-                <div className="text-right shrink-0">
-                  <span className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded ${STATUS_STYLE[s.status] || ""}`}>{LABELS[s.status] ?? s.status}</span>
-                  {(s.repliedAt || s.sentAt) && (
-                    <p className="text-[10px] text-ink-soft mt-1">{new Date(s.repliedAt || s.sentAt!).toLocaleDateString()}</p>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-          <Pagination page={data.page} pageSize={data.pageSize} total={data.total} onPage={setPage} />
+          <DataTable
+            caption="Email activity"
+            rows={data.items}
+            rowKey={(r) => r.id}
+            onRowClick={(r) => router.push(`/dashboard/outreach/campaigns/${r.campaignId}`)}
+            columns={[
+              { key: "score", header: "Fit", hideOnMobile: true, render: (r) => <ScorePill score={r.matchScore} /> },
+              {
+                key: "investor",
+                header: "Investor",
+                render: (r) => (
+                  <span>
+                    <span className="text-navy">{r.investorName}</span>
+                    <span className="block text-xs text-ink-soft">{r.investorFirm.trim()}</span>
+                  </span>
+                ),
+              },
+              { key: "subject", header: "Subject", hideOnMobile: true, render: (r) => <span className="line-clamp-1">{r.subject}</span> },
+              { key: "status", header: "Status", render: (r) => <StatusBadge status={r.status} /> },
+              { key: "date", header: "Date", render: (r) => <span className="text-xs text-ink-soft">{r.repliedAt || r.sentAt ? new Date(r.repliedAt || r.sentAt).toLocaleDateString() : "—"}</span> },
+            ]}
+          />
+          <Pagination page={data.page} pageSize={data.pageSize} total={data.total} onPage={(p) => set({ page: String(p) })} />
         </>
       )}
     </div>

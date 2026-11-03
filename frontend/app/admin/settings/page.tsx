@@ -58,6 +58,66 @@ function AIHealth() {
   );
 }
 
+const WEIGHT_KEYS = ["sector", "stage", "checkSize", "thesis", "businessModel", "geography", "founderMarketFit", "tractionMandate"] as const;
+
+/** Matching weights: validated server-side to sum to 100. */
+function MatchingWeights() {
+  const [weights, setWeights] = useState<Record<string, number> | null>(null);
+  const [labels, setLabels] = useState<Record<string, string>>({});
+  const [defaults, setDefaults] = useState<Record<string, number>>({});
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    api
+      .get<{ weights: Record<string, number>; defaults: Record<string, number>; labels: Record<string, string> }>("/api/admin/matching-weights")
+      .then((r) => (setWeights(r.weights), setDefaults(r.defaults), setLabels(r.labels)))
+      .catch((err) => toast.error(err instanceof ApiError ? err.message : "Couldn't load weights."));
+  }, []);
+  if (!weights) return null;
+  const total = WEIGHT_KEYS.reduce((s, k) => s + (Number(weights[k]) || 0), 0);
+  async function save() {
+    setSaving(true);
+    try {
+      const r = await api.put<{ weights: Record<string, number> }>("/api/admin/matching-weights", { weights });
+      setWeights(r.weights);
+      toast.success("Matching weights saved. New rankings apply within a minute.");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+  return (
+    <section className="card p-6 mt-8">
+      <h2 className="font-display text-base mb-1">Matching weights</h2>
+      <p className="text-xs text-ink-soft mb-4">Relevance weights for investor matching. Hard eligibility filters are separate and not affected. Must total 100.</p>
+      <div className="space-y-2">
+        {WEIGHT_KEYS.map((k) => (
+          <label key={k} className="flex items-center justify-between gap-3 text-sm">
+            <span>{labels[k] ?? k}</span>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              className="input-field w-24 text-right"
+              value={weights[k]}
+              onChange={(e) => setWeights({ ...weights, [k]: Number(e.target.value) })}
+            />
+          </label>
+        ))}
+      </div>
+      <p className={`text-xs mt-3 font-mono ${total === 100 ? "text-verified" : "text-danger"}`}>Total: {total} / 100</p>
+      <div className="flex gap-2 mt-4">
+        <button className="btn-primary text-sm" onClick={save} disabled={saving || total !== 100}>
+          {saving ? "Saving…" : "Save weights"}
+        </button>
+        <button className="btn-ghost text-sm" onClick={() => setWeights(defaults)}>
+          Reset to defaults
+        </button>
+      </div>
+    </section>
+  );
+}
+
 export default function AdminSettingsPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [name, setName] = useState("");
@@ -112,6 +172,7 @@ export default function AdminSettingsPage() {
           {saving ? "Saving…" : "Save"}
         </button>
       </form>
+      <MatchingWeights />
       <AIHealth />
     </div>
   );

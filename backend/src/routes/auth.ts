@@ -16,8 +16,13 @@ const signupSchema = z.object({
   name: z.string().trim().min(1, "Name is required.").max(100),
 });
 
+/**
+ * "Has a company" means a company that finished onboarding — a draft started during
+ * onboarding (including after Google Sign-In) doesn't count, so new users are never
+ * treated as onboarded prematurely. Existing companies were backfilled as complete.
+ */
 async function hasCompany(userId: string): Promise<boolean> {
-  return (await pool.query("SELECT 1 FROM companies WHERE user_id = $1 LIMIT 1", [userId])).rows.length > 0;
+  return (await pool.query("SELECT 1 FROM companies WHERE user_id = $1 AND onboarding_completed_at IS NOT NULL LIMIT 1", [userId])).rows.length > 0;
 }
 
 authRouter.post("/signup", async (req, res) => {

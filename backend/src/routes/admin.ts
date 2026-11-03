@@ -7,6 +7,8 @@ import { resolveEntitlementTier } from "../services/pricingService";
 import { publicWriteRateLimiter } from "../lib/rateLimiters";
 import { checkGmailRepliesForAllUsers } from "../services/gmailWatcher";
 import { probeAIProviders } from "../lib/llmService";
+import { loadWeights, saveWeights } from "../services/matchingContext";
+import { DEFAULT_WEIGHTS, COMPONENT_LABELS } from "../services/matchingService";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -149,7 +151,40 @@ const createInvestorSchema = z.object({
   checkSizeMaxUsd: z.number().int().nullable().optional(),
   thesisKeywords: z.array(z.string()).default([]),
   portfolioCompanies: z.array(z.string()).default([]),
+  investorType: z.enum(["VC", "MICRO_VC", "ANGEL", "ANGEL_NETWORK", "CVC", "ACCELERATOR", "FAMILY_OFFICE", "SYNDICATE", "OTHER"]).nullable().optional(),
+  subSectors: z.array(z.string()).default([]),
+  businessModels: z.array(z.string()).default([]),
+  leadsRounds: z.boolean().nullable().optional(),
+  fundStatus: z.enum(["ACTIVE", "NOT_INVESTING", "UNKNOWN"]).optional(),
+  tractionRequirement: z.enum(["PRE_REVENUE_OK", "REVENUE_REQUIRED"]).nullable().optional(),
+  founderPreferences: z.array(z.string()).default([]),
+  fundDescription: z.string().max(4000).nullable().optional(),
 });
+
+/** v2 enrichment columns, written by both create and edit (only keys present in the request). */
+const ENRICHMENT: [string, string][] = [
+  ["investorType", "investor_type"],
+  ["subSectors", "sub_sectors"],
+  ["businessModels", "business_models"],
+  ["leadsRounds", "leads_rounds"],
+  ["fundStatus", "fund_status"],
+  ["tractionRequirement", "traction_requirement"],
+  ["founderPreferences", "founder_preferences"],
+  ["fundDescription", "fund_description"],
+];
+
+async function writeEnrichment(id: string, v: Record<string, any>, raw: Record<string, any>) {
+  const sets: string[] = [];
+  const params: any[] = [];
+  for (const [key, col] of ENRICHMENT) {
+    if (!(key in raw)) continue;
+    params.push(v[key] ?? (key === "fundStatus" ? "UNKNOWN" : Array.isArray(v[key]) ? [] : null));
+    sets.push(`${col} = $${params.length}`);
+  }
+  if (!sets.length) return;
+  params.push(id);
+  await pool.query(`UPDATE investors SET ${sets.join(", ")} WHERE id = $${params.length}`, params);
+}
 
 adminRouter.post("/investors", async (req, res) => {
   const parsed = createInvestorSchema.safeParse(req.body);
@@ -177,7 +212,9 @@ adminRouter.post("/investors", async (req, res) => {
         v.portfolioCompanies,
       ]
     );
-    res.status(201).json(toInvestorResponse(result.rows[0]));
+    await writeEnrichment(result.rows[0].id, v, req.body ?? {});
+    const fresh = (await pool.query("SELECT * FROM investors WHERE id = $1", [result.rows[0].id])).rows[0];
+    res.status(201).json(toInvestorResponse(fresh));
   } catch (err: any) {
     if (err.code === "23505") return res.status(409).json({ error: "An investor with this email already exists." });
     throw err;
@@ -226,7 +263,9 @@ adminRouter.patch("/investors/:id", async (req, res) => {
       req.params.id,
     ]
   );
-  res.json(toInvestorResponse(result.rows[0]));
+  await writeEnrichment(req.params.id, v, req.body ?? {});
+  const fresh = (await pool.query("SELECT * FROM investors WHERE id = $1", [req.params.id])).rows[0];
+  res.json(toInvestorResponse(fresh ?? result.rows[0]));
 });
 
 adminRouter.delete("/investors/:id", async (req, res) => {
@@ -505,6 +544,19 @@ adminRouter.patch("/leads/:id", async (req, res) => {
   res.json(result.rows[0]);
 });
 
+// ---------- Matching weights ----------
+adminRouter.get("/matching-weights", async (_req, res) => {
+  res.json({ weights: await loadWeights(), defaults: DEFAULT_WEIGHTS, labels: COMPONENT_LABELS });
+});
+
+adminRouter.put("/matching-weights", async (req, res) => {
+  try {
+    res.json({ weights: await saveWeights(req.body?.weights, req.auth!.userId) });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 /** Live AI provider check — sends a tiny prompt to each configured provider. */
 adminRouter.get("/ai-health", async (_req, res) => {
   res.json({ providers: await probeAIProviders(), checkedAt: new Date().toISOString() });
@@ -537,6 +589,14 @@ function toInvestorResponse(row: any) {
     portfolioCompanies: row.portfolio_companies,
     isVerified: row.is_verified,
     needsEnrichment: row.needs_enrichment,
+    investorType: row.investor_type ?? null,
+    subSectors: row.sub_sectors ?? [],
+    businessModels: row.business_models ?? [],
+    leadsRounds: row.leads_rounds ?? null,
+    fundStatus: row.fund_status ?? "UNKNOWN",
+    tractionRequirement: row.traction_requirement ?? null,
+    founderPreferences: row.founder_preferences ?? [],
+    fundDescription: row.fund_description ?? null,
     lastKnownActiveAt: row.last_known_active_at,
     createdAt: row.created_at,
   };

@@ -4,8 +4,14 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        paper: "#F7F8F6",
+        // Warm cream canvas, navy headings, deep green/teal accents.
+        paper: "#F8F6F1",
+        surface: "#FFFFFF",
+        "surface-muted": "#F3F1EA",
         ink: "#15181C",
+        navy: "#1B2A41",
+        teal: "#2A7F7A",
+        "teal-soft": "#E5F1EF",
         "ink-soft": "#4A5058",
         line: "#E3E6E1",
         "line-soft": "#EDEFEB",
@@ -31,13 +37,22 @@ module.exports = {
         card: "0 1px 3px rgba(21, 24, 28, 0.06), 0 4px 12px rgba(21, 24, 28, 0.04)",
       },
       keyframes: {
+        shimmer: {
+          "0%, 100%": { opacity: "0.55" },
+          "50%": { opacity: "1" },
+        },
         "fade-up": {
           "0%": { opacity: "0", transform: "translateY(6px)" },
           "100%": { opacity: "1", transform: "translateY(0)" },
         },
       },
+      maxWidth: {
+        page: "72rem",
+        form: "42rem",
+      },
       animation: {
         "fade-up": "fade-up 0.35s ease-out both",
+        shimmer: "shimmer 1.4s ease-in-out infinite",
       },
     },
   },

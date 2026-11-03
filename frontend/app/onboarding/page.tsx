@@ -1,436 +1,254 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import toast from "react-hot-toast";
-import { api, ApiError, errorMessage, getStoredUser, getToken, startGmailConnect, StoredUser } from "@/lib/api";
+import { ArrowLeft, ArrowRight, CheckCircle2 } from "lucide-react";
+import { api, errorMessage, getToken, StoredUser } from "@/lib/api";
+import { FormField, ProgressBar, ProgressIndicator } from "@/components/ui";
+import {
+  DocumentsEditor,
+  FlushRef,
+  FoundersEditor,
+  FundraisingEditor,
+  OverviewEditor,
+  PreferencesEditor,
+  ProductMarketEditor,
+  TractionEditor,
+} from "@/components/profile/Sections";
+import { IntelligenceReview } from "@/components/profile/IntelligenceReview";
+import { Profile } from "@/components/profile/types";
 
-const STAGES = ["IDEA", "PRE_SEED", "SEED", "SERIES_A", "SERIES_B_PLUS"];
-const SECTORS = ["Fintech", "SaaS", "Consumer", "Healthtech", "Climate", "AI/ML", "Marketplace", "Deeptech", "Other"];
-const COUNTRIES = ["India", "United States", "United Kingdom", "Singapore", "UAE", "Other"];
-const STEP_LABELS = ["Company", "Stage", "Sector", "Country", "Raise amount", "Deck", "Connect Gmail", "Finish"];
-
-const EMPTY_FORM = { name: "", oneLiner: "", problem: "", solution: "", stage: "SEED", sector: "", geography: "", askAmountUsd: "" };
-type Draft = { step: number; companyId: string | null; deckDone: boolean; form: typeof EMPTY_FORM };
-
-// Progress survives refreshes and the round-trip to Google for Gmail. Keyed per user so a
-// shared browser never shows one founder another's draft.
-const draftKey = (userId: string) => `gopitch_onboarding_${userId}`;
-
-function loadDraft(userId: string): Draft | null {
-  try {
-    const raw = localStorage.getItem(draftKey(userId));
-    return raw ? (JSON.parse(raw) as Draft) : null;
-  } catch {
-    return null;
-  }
-}
+const STEPS = ["Founders", "Company", "Product & market", "Traction", "Fundraising", "Investor preferences", "Documents & review"];
+// Which onboarding step each completeness section lives on (for "fix this" links).
+const STEP_OF: Record<string, number> = { founders: 0, overview: 1, productMarket: 2, traction: 3, fundraising: 4, preferences: 5, documents: 6 };
 
 export default function OnboardingPage() {
-  const router = useRouter();
-  const [user, setUser] = useState<StoredUser | null>(null);
-  const [ready, setReady] = useState(false);
-  const [step, setStep] = useState(0);
-  const [saving, setSaving] = useState(false);
-  const [companyId, setCompanyId] = useState<string | null>(null);
-  const [deckStatus, setDeckStatus] = useState<{ generationAvailable: boolean; planAllowsGeneration: boolean } | null>(null);
-  const [deckDone, setDeckDone] = useState(false);
-  const [gmailConnected, setGmailConnected] = useState(false);
-  const [connecting, setConnecting] = useState(false);
-  const [form, setForm] = useState(EMPTY_FORM);
+  return (
+    <Suspense fallback={<FullPageNote text="Loading…" />}>
+      <Onboarding />
+    </Suspense>
+  );
+}
 
+function FullPageNote({ text }: { text: string }) {
+  return <div className="min-h-screen flex items-center justify-center text-sm text-ink-soft">{text}</div>;
+}
+
+function Onboarding() {
+  const router = useRouter();
+  const params = useSearchParams();
+  const startNew = params.get("new") === "1";
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [needsName, setNeedsName] = useState(false);
+  const [step, setStep] = useState(0);
+  const [maxStep, setMaxStep] = useState(0);
+  const [moving, setMoving] = useState(false);
+  const [completing, setCompleting] = useState(false);
+  const [confirmed, setConfirmed] = useState(false);
+  const flushRef: FlushRef = useRef(null);
+
+  // Resume from the server: progress survives logout, a new device, and the Google round-trip.
   useEffect(() => {
-    const stored = getStoredUser();
-    if (!getToken() || !stored) {
+    if (!getToken()) {
       router.replace("/login?next=/onboarding");
       return;
     }
-    api
-      .get<StoredUser>("/api/auth/me")
-      .then((me) => {
+    (async () => {
+      try {
+        const me = await api.get<StoredUser>("/api/auth/me");
         if (me.role === "ADMIN") return router.replace("/admin");
-        const draft = loadDraft(me.id);
-        // Existing founders aren't pushed through onboarding again.
-        if (me.hasCompany && !draft) return router.replace("/dashboard");
-        setUser(me);
-        if (draft) {
-          setStep(draft.step);
-          setCompanyId(draft.companyId);
-          setDeckDone(draft.deckDone);
-          setForm({ ...EMPTY_FORM, ...draft.form });
+        const companies = await api.get<{ id: string; onboardingComplete: boolean }[]>("/api/company-profile/companies");
+        const draft = companies.find((c) => !c.onboardingComplete);
+        if (!draft) {
+          if (me.hasCompany && !startNew) return router.replace("/dashboard");
+          return setNeedsName(true);
         }
-        setReady(true);
-      })
-      .catch(() => {});
-    api.get<{ gmailConnected: boolean }>("/api/profile/me").then((p) => setGmailConnected(p.gmailConnected)).catch(() => {});
-  }, [router]);
-
-  useEffect(() => {
-    if (!user || !ready) return;
-    localStorage.setItem(draftKey(user.id), JSON.stringify({ step, companyId, deckDone, form } satisfies Draft));
-  }, [user, ready, step, companyId, deckDone, form]);
-
-  useEffect(() => {
-    if (companyId && step === 5 && !deckStatus) {
-      api.get<{ generationAvailable: boolean; planAllowsGeneration: boolean }>("/api/decks/config/status").then(setDeckStatus).catch(() => {});
-    }
-  }, [companyId, step, deckStatus]);
-
-  const next = () => setStep((s) => Math.min(s + 1, STEP_LABELS.length - 1));
-  const back = () => setStep((s) => Math.max(s - 1, 0));
-
-  async function saveCompanyAndAdvance() {
-    const amount = Number(form.askAmountUsd);
-    if (!Number.isInteger(amount) || amount <= 0) {
-      toast.error("Enter the raise amount as a whole number of US dollars, e.g. 500000.");
-      return;
-    }
-    setSaving(true);
-    const payload = {
-      name: form.name.trim(),
-      oneLiner: form.oneLiner.trim(),
-      problem: form.problem.trim(),
-      solution: form.solution.trim(),
-      stage: form.stage,
-      sector: [form.sector],
-      geography: [form.geography],
-      askAmountUsd: amount,
-    };
-    try {
-      // Going Back and then Next again updates the same company instead of creating a duplicate.
-      if (companyId) {
-        await api.patch(`/api/companies/${companyId}`, payload);
-      } else {
-        const company = await api.post<{ id: string }>("/api/companies", payload);
-        setCompanyId(company.id);
+        const p = await api.get<Profile>(`/api/company-profile?companyId=${draft.id}`);
+        load(p);
+      } catch (err) {
+        toast.error(errorMessage(err, "Couldn't load your profile."));
       }
-      next();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function load(p: Profile) {
+    setNeedsName(false);
+    setProfile(p);
+    const s = Math.min(p.onboarding.step, STEPS.length - 1);
+    setStep(s);
+    setMaxStep(s);
+    setConfirmed(p.intelligence?.status === "CONFIRMED");
+  }
+
+  const onSaved = useCallback((p: Profile) => {
+    setProfile(p);
+    if (p.intelligence?.status !== "CONFIRMED") setConfirmed(false);
+  }, []);
+
+  async function go(to: number) {
+    if (!profile || moving) return;
+    setMoving(true);
+    try {
+      const ok = (await flushRef.current?.()) ?? true;
+      if (!ok) return toast.error("Fix the highlighted field before continuing.");
+      if (to > step) await api.post(`/api/company-profile/${profile.id}/onboarding/step`, { step: to });
+      flushRef.current = null;
+      setStep(to);
+      setMaxStep((m) => Math.max(m, to));
+      window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Couldn't save company info.");
+      toast.error(errorMessage(err, "Couldn't save your progress."));
+    } finally {
+      setMoving(false);
+    }
+  }
+
+  async function saveAndExit() {
+    await flushRef.current?.();
+    toast.success("Progress saved. Pick up where you left off any time.");
+    router.push("/dashboard");
+  }
+
+  async function complete() {
+    if (!profile) return;
+    setCompleting(true);
+    try {
+      await flushRef.current?.();
+      await api.post(`/api/company-profile/${profile.id}/onboarding/complete`);
+      toast.success("Your company profile is ready.");
+      router.replace("/dashboard/investors");
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't finish onboarding."));
+      const fresh = await api.get<Profile>(`/api/company-profile?companyId=${profile.id}`).catch(() => null);
+      if (fresh) setProfile(fresh);
+    } finally {
+      setCompleting(false);
+    }
+  }
+
+  if (needsName) return <StartCard additional={startNew} onCreated={load} />;
+  if (!profile) return <FullPageNote text="Loading your profile…" />;
+
+  const editorProps = { profile, onSaved, flushRef };
+  const missing = profile.completeness.missingRequired;
+
+  return (
+    <div className="min-h-screen bg-paper">
+      <header className="sticky top-0 z-20 bg-surface/95 backdrop-blur border-b border-line">
+        <div className="max-w-3xl mx-auto px-4 sm:px-6 py-3">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <Link href="/dashboard" className="font-display text-lg text-navy">
+              GoPitch
+            </Link>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-ink-soft hidden sm:inline">Profile {profile.completeness.percent}% complete</span>
+              <button className="btn-ghost text-xs" onClick={saveAndExit}>
+                Save &amp; finish later
+              </button>
+            </div>
+          </div>
+          <ProgressIndicator steps={STEPS} current={step} onSelect={(i) => i <= maxStep && i !== step && go(i)} />
+          <div className="sm:hidden mt-2 flex items-center justify-between text-xs text-ink-soft">
+            <span>
+              Step {step + 1} of {STEPS.length} · {STEPS[step]}
+            </span>
+            <span>{profile.completeness.percent}%</span>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-3xl mx-auto px-4 sm:px-6 py-8">
+        <div className="card p-5 sm:p-8 animate-fade-up" key={step}>
+          {step === 0 && <FoundersEditor {...editorProps} />}
+          {step === 1 && <OverviewEditor {...editorProps} />}
+          {step === 2 && <ProductMarketEditor {...editorProps} />}
+          {step === 3 && <TractionEditor {...editorProps} />}
+          {step === 4 && <FundraisingEditor {...editorProps} />}
+          {step === 5 && <PreferencesEditor {...editorProps} />}
+          {step === 6 && (
+            <div className="space-y-10">
+              <DocumentsEditor {...editorProps} />
+              <div>
+                <h2 className="font-display text-xl mb-1">Review your profile</h2>
+                <p className="text-sm text-ink-soft mb-5">Check the summary we built from your answers. Correct anything that's off, then confirm.</p>
+                {missing.length > 0 && (
+                  <div className="card p-4 mb-5 border-signal/30 bg-signal-soft/40">
+                    <p className="text-sm font-medium text-signal mb-2">Still needed before you can finish</p>
+                    <ul className="space-y-1">
+                      {missing.map((m) => (
+                        <li key={m.field}>
+                          <button className="text-sm text-ink hover:text-verified underline-offset-2 hover:underline" onClick={() => go(STEP_OF[m.section] ?? 0)}>
+                            {m.label} →
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <IntelligenceReview profile={profile} onConfirmed={() => setConfirmed(true)} compact />
+              </div>
+              <div className="border-t border-line pt-6">
+                <ProgressBar value={profile.completeness.percent} label="Profile completeness" />
+                <p className="text-xs text-ink-soft mt-2">{profile.completeness.percent}% complete — optional answers can be added later from My Company.</p>
+                <button className="btn-primary mt-4 w-full sm:w-auto inline-flex items-center justify-center gap-2" onClick={complete} disabled={completing || !profile.completeness.canComplete || !confirmed}>
+                  <CheckCircle2 size={16} aria-hidden />
+                  {completing ? "Finishing…" : "Finish and see my investor matches"}
+                </button>
+                {(!profile.completeness.canComplete || !confirmed) && (
+                  <p className="text-xs text-ink-soft mt-2">
+                    {!profile.completeness.canComplete ? "Complete the required items above." : "Confirm your profile summary to finish."}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <nav className="flex items-center justify-between mt-6" aria-label="Onboarding steps">
+          <button className="btn-secondary inline-flex items-center gap-1.5" onClick={() => go(step - 1)} disabled={step === 0 || moving}>
+            <ArrowLeft size={14} aria-hidden /> Back
+          </button>
+          {step < STEPS.length - 1 && (
+            <button className="btn-primary inline-flex items-center gap-1.5" onClick={() => go(step + 1)} disabled={moving}>
+              {moving ? "Saving…" : "Next"} <ArrowRight size={14} aria-hidden />
+            </button>
+          )}
+        </nav>
+      </main>
+    </div>
+  );
+}
+
+function StartCard({ additional, onCreated }: { additional: boolean; onCreated: (p: Profile) => void }) {
+  const [name, setName] = useState("");
+  const [saving, setSaving] = useState(false);
+  async function start(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      onCreated(await api.post<Profile>("/api/company-profile", { name, additional }));
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't start your profile."));
     } finally {
       setSaving(false);
     }
   }
-
-  async function connectGmail() {
-    setConnecting(true);
-    try {
-      await startGmailConnect("/onboarding");
-    } catch (err) {
-      toast.error(errorMessage(err, "Couldn't start Gmail connection."));
-      setConnecting(false);
-    }
-  }
-
-  function finish() {
-    if (user) localStorage.removeItem(draftKey(user.id));
-    router.push(companyId ? `/company/${companyId}` : "/dashboard");
-  }
-
-  if (!ready) {
-    return <div className="min-h-screen flex items-center justify-center text-sm text-ink-soft">Loading…</div>;
-  }
-
   return (
-    <div className="min-h-screen flex flex-col items-center px-4 sm:px-6 py-12">
-      <div className="w-full max-w-lg">
-        <div className="flex gap-1 mb-8" aria-hidden>
-          {STEP_LABELS.map((_, i) => (
-            <div key={i} className={`h-0.5 flex-1 rounded-full ${i <= step ? "bg-verified" : "bg-line"}`} />
-          ))}
-        </div>
-        <p className="label mb-6">
-          Step {step + 1} of {STEP_LABELS.length} · {STEP_LABELS[step]}
+    <div className="min-h-screen flex items-center justify-center px-4">
+      <form onSubmit={start} className="card p-6 sm:p-8 w-full max-w-md animate-fade-up">
+        <p className="label mb-2">{additional ? "New company" : "Welcome to GoPitch"}</p>
+        <h1 className="font-display text-2xl mb-2">Let's build your fundraising profile</h1>
+        <p className="text-sm text-ink-soft mb-6">
+          Seven short steps — about 10 minutes. Everything saves as you go, and the more specific you are, the more relevant your investor matches.
         </p>
-
-        {step === 0 && (
-          <StepCard title="Tell us about your company">
-            <Field label="Company name *">
-              <input autoFocus maxLength={120} className="input-field" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Velo Pay" />
-            </Field>
-            <Field label="One-line description *">
-              <input maxLength={200} className="input-field" value={form.oneLiner} onChange={(e) => setForm({ ...form, oneLiner: e.target.value })} placeholder="Cross-border payments infra for freelancers" />
-            </Field>
-            <Field label="What problem are you solving? *">
-              <textarea rows={3} maxLength={4000} className="input-field" value={form.problem} onChange={(e) => setForm({ ...form, problem: e.target.value })} />
-            </Field>
-            <Field label="How do you solve it? *">
-              <textarea rows={3} maxLength={4000} className="input-field" value={form.solution} onChange={(e) => setForm({ ...form, solution: e.target.value })} />
-            </Field>
-            <NavButtons onNext={next} nextDisabled={![form.name, form.oneLiner, form.problem, form.solution].every((v) => v.trim())} />
-          </StepCard>
-        )}
-
-        {step === 1 && (
-          <StepCard title="What stage are you at?">
-            <div className="grid grid-cols-1 gap-2" role="radiogroup">
-              {STAGES.map((s) => (
-                <Choice key={s} selected={form.stage === s} onClick={() => setForm({ ...form, stage: s })} className="text-left">
-                  {s.replace(/_/g, " ")}
-                </Choice>
-              ))}
-            </div>
-            <NavButtons onBack={back} onNext={next} />
-          </StepCard>
-        )}
-
-        {step === 2 && (
-          <StepCard title="What sector are you in?">
-            <div className="grid grid-cols-2 gap-2" role="radiogroup">
-              {SECTORS.map((s) => (
-                <Choice key={s} selected={form.sector === s} onClick={() => setForm({ ...form, sector: s })}>
-                  {s}
-                </Choice>
-              ))}
-            </div>
-            <p className="text-xs text-ink-soft mt-3">Investor matching uses this. You can refine it later from your company page.</p>
-            <NavButtons onBack={back} onNext={next} nextDisabled={!form.sector} />
-          </StepCard>
-        )}
-
-        {step === 3 && (
-          <StepCard title="Where are you based?">
-            <div className="grid grid-cols-2 gap-2" role="radiogroup">
-              {COUNTRIES.map((c) => (
-                <Choice key={c} selected={form.geography === c} onClick={() => setForm({ ...form, geography: c })}>
-                  {c}
-                </Choice>
-              ))}
-            </div>
-            <NavButtons onBack={back} onNext={next} nextDisabled={!form.geography} />
-          </StepCard>
-        )}
-
-        {step === 4 && (
-          <StepCard title="How much are you raising?">
-            <Field label="Amount in USD *">
-              <input
-                type="number"
-                inputMode="numeric"
-                min={1}
-                step={1}
-                autoFocus
-                className="input-field"
-                value={form.askAmountUsd}
-                onChange={(e) => setForm({ ...form, askAmountUsd: e.target.value })}
-                placeholder="500000"
-              />
-            </Field>
-            {Number(form.askAmountUsd) > 0 && <p className="text-xs text-ink-soft -mt-2">${Number(form.askAmountUsd).toLocaleString()}</p>}
-            <NavButtons onBack={back} onNext={saveCompanyAndAdvance} nextDisabled={!form.askAmountUsd} nextLabel={saving ? "Saving…" : "Save & continue"} nextLoading={saving} />
-          </StepCard>
-        )}
-
-        {step === 5 && companyId && (
-          <StepCard title="Your deck">
-            <DeckStep companyId={companyId} status={deckStatus} done={deckDone} onDone={() => setDeckDone(true)} />
-            <NavButtons onBack={back} onNext={next} nextDisabled={!deckDone} />
-          </StepCard>
-        )}
-
-        {step === 6 && (
-          <StepCard title="Connect Gmail">
-            {gmailConnected ? (
-              <p className="text-sm text-verified bg-verified-soft rounded px-3 py-2 mb-6">Gmail is connected.</p>
-            ) : (
-              <p className="text-sm text-ink-soft mb-6">
-                Outreach sends from your own Gmail account — never a shared platform address. You can skip this and connect later from
-                Settings.
-              </p>
-            )}
-            {!gmailConnected && (
-              <button className="btn-primary w-full mb-3" onClick={connectGmail} disabled={connecting}>
-                {connecting ? "Redirecting to Google…" : "Connect Gmail"}
-              </button>
-            )}
-            <div className="flex gap-3">
-              <button className="btn-secondary flex-1" onClick={back}>
-                Back
-              </button>
-              <button className={gmailConnected ? "btn-primary flex-1" : "btn-secondary flex-1"} onClick={next}>
-                {gmailConnected ? "Next" : "Skip for now"}
-              </button>
-            </div>
-          </StepCard>
-        )}
-
-        {step === 7 && (
-          <StepCard title="You're set up">
-            <p className="text-sm text-ink-soft mb-6">
-              Your company profile is saved{deckDone ? ", your deck is ready," : ""} and you can see matched investors now.
-            </p>
-            <button className="btn-primary w-full" onClick={finish}>
-              See my investor matches
-            </button>
-          </StepCard>
-        )}
-
-        {step === 5 && !companyId && (
-          <StepCard title="Your deck">
-            <p className="text-sm text-ink-soft mb-4">We couldn't find your saved company details.</p>
-            <button className="btn-primary" onClick={() => setStep(0)}>
-              Start again
-            </button>
-          </StepCard>
-        )}
-
-        <p className="text-xs text-ink-soft mt-6 text-center">
-          <Link href="/dashboard" className="hover:text-ink">
-            Finish later
-          </Link>{" "}
-          — your progress is saved.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function StepCard({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="card p-6 sm:p-8 animate-fade-up">
-      <h1 className="font-display text-2xl mb-6">{title}</h1>
-      {children}
-    </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="block mb-4">
-      <span className="label block mb-1.5">{label}</span>
-      {children}
-    </label>
-  );
-}
-
-function Choice({ selected, onClick, children, className = "" }: { selected: boolean; onClick: () => void; children: React.ReactNode; className?: string }) {
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={selected}
-      onClick={onClick}
-      className={`px-4 py-3 rounded border text-sm transition-colors ${className} ${selected ? "border-verified bg-verified-soft" : "border-line hover:border-ink-soft"}`}
-    >
-      {children}
-    </button>
-  );
-}
-
-function NavButtons({
-  onBack,
-  onNext,
-  nextDisabled,
-  nextLabel = "Next",
-  nextLoading,
-}: {
-  onBack?: () => void;
-  onNext: () => void;
-  nextDisabled?: boolean;
-  nextLabel?: string;
-  nextLoading?: boolean;
-}) {
-  return (
-    <div className="flex items-center justify-between mt-6">
-      {onBack ? (
-        <button className="btn-secondary" onClick={onBack}>
-          Back
+        <FormField label="Company name">{(p) => <input className="input-field" {...p} required maxLength={120} value={name} onChange={(e) => setName(e.target.value)} autoFocus />}</FormField>
+        <button className="btn-primary w-full mt-5" disabled={saving || !name.trim()}>
+          {saving ? "Starting…" : "Start"}
         </button>
-      ) : (
-        <span />
-      )}
-      <button className="btn-primary" onClick={onNext} disabled={nextDisabled || nextLoading}>
-        {nextLabel}
-      </button>
-    </div>
-  );
-}
-
-function DeckStep({
-  companyId,
-  status,
-  done,
-  onDone,
-}: {
-  companyId: string;
-  status: { generationAvailable: boolean; planAllowsGeneration: boolean } | null;
-  done: boolean;
-  onDone: () => void;
-}) {
-  const [generating, setGenerating] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function handleGenerate() {
-    setGenerating(true);
-    setError(null);
-    try {
-      await api.post(`/api/decks/${companyId}/generate`);
-      onDone();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Generation failed.");
-    } finally {
-      setGenerating(false);
-    }
-  }
-
-  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-    if (file.size > 25 * 1024 * 1024) {
-      setError("Deck files must be 25 MB or smaller.");
-      return;
-    }
-    setUploading(true);
-    setError(null);
-    try {
-      const formData = new FormData();
-      formData.append("deck", file);
-      await api.postForm(`/api/decks/${companyId}/upload`, formData);
-      onDone();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Upload failed.");
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  if (done) {
-    return <p className="text-sm text-verified bg-verified-soft rounded px-3 py-2 mb-4">Deck ready.</p>;
-  }
-
-  return (
-    <div className="mb-4">
-      {status?.generationAvailable && (
-        <button className="btn-primary w-full mb-3" onClick={handleGenerate} disabled={generating || uploading}>
-          {generating ? "Generating… (up to a minute)" : "Generate deck with AI"}
-        </button>
-      )}
-      {status && !status.planAllowsGeneration && (
-        <p className="text-xs text-ink-soft bg-line-soft rounded px-3 py-2 mb-3">
-          The Free plan uses your own deck. AI-guided deck generation is included from{" "}
-          <Link href="/pricing" className="text-verified hover:underline">
-            Starter
-          </Link>
-          .
-        </p>
-      )}
-      {status?.planAllowsGeneration && !status.generationAvailable && (
-        <p className="text-xs text-signal bg-signal-soft rounded px-3 py-2 mb-3">AI generation isn't available right now — upload your own deck instead.</p>
-      )}
-
-      <label className={`btn-secondary w-full text-center cursor-pointer block ${uploading ? "opacity-60 pointer-events-none" : ""}`}>
-        {uploading ? "Uploading…" : "Upload deck (PPTX or PDF, max 25 MB)"}
-        <input type="file" accept=".pptx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation" className="sr-only" onChange={handleUpload} disabled={uploading} />
-      </label>
-
-      {error && (
-        <p className="text-sm text-danger mt-3" role="alert">
-          {error}
-        </p>
-      )}
+      </form>
     </div>
   );
 }

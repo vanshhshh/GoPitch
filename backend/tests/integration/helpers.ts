@@ -25,11 +25,11 @@ let ipCounter = 1;
 /** Each request gets its own client IP so the per-IP rate limiters don't trip mid-suite. */
 export function api(app: Express) {
   const ip = () => `10.0.${Math.floor(ipCounter / 250)}.${(ipCounter++ % 250) + 1}`;
-  const wrap = (method: "get" | "post" | "patch" | "delete") => (url: string, token?: string) => {
+  const wrap = (method: "get" | "post" | "put" | "patch" | "delete") => (url: string, token?: string) => {
     const req = request(app)[method](url).set("X-Forwarded-For", ip());
     return token ? req.set("Authorization", `Bearer ${token}`) : req;
   };
-  return { get: wrap("get"), post: wrap("post"), patch: wrap("patch"), delete: wrap("delete") };
+  return { get: wrap("get"), post: wrap("post"), put: wrap("put"), patch: wrap("patch"), delete: wrap("delete") };
 }
 
 export async function createUser(signToken: (p: any) => string, opts: { email?: string; role?: "FOUNDER" | "ADMIN"; name?: string } = {}) {

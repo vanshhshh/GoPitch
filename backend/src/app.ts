@@ -14,6 +14,9 @@ import { emailTemplateRouter } from "./routes/emailTemplates";
 import { notificationRouter } from "./routes/notifications";
 import { profileRouter } from "./routes/profile";
 import { leadsRouter } from "./routes/leads";
+import { companyProfileRouter } from "./routes/companyProfile";
+import { discoveryRouter } from "./routes/discovery";
+import { overviewRouter } from "./routes/overview";
 import { authRateLimiter, generalRateLimiter } from "./lib/rateLimiters";
 import { assertRefreshTokenEncryptionKeyConfigured } from "./lib/tokenEncryption";
 import { checkGmailRepliesForAllUsers } from "./services/gmailWatcher";
@@ -40,7 +43,7 @@ app.use((req, res, next) => {
   if (origin && allowedOrigins.has(origin)) {
     res.header("Access-Control-Allow-Origin", origin);
     res.header("Vary", "Origin");
-    res.header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
     res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
     res.header("Access-Control-Allow-Credentials", "true");
   }
@@ -73,6 +76,9 @@ app.use("/api/email-templates", emailTemplateRouter);
 app.use("/api/notifications", notificationRouter);
 app.use("/api/profile", profileRouter);
 app.use("/api/leads", leadsRouter);
+app.use("/api/company-profile", companyProfileRouter);
+app.use("/api/discovery", discoveryRouter);
+app.use("/api/overview", overviewRouter);
 app.use(googleAuthRouter); // mounts /auth/google/init and /auth/google/callback directly (not under /api)
 
 // Centralized error handler — anything thrown in a route lands here instead of hanging

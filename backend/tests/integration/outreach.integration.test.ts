@@ -105,7 +105,7 @@ describe("tenant isolation", () => {
     const a = await createUser(signToken);
     const b = await createUser(signToken);
     const companyA = await createCompany(a.id);
-    const created = await client.post("/api/campaigns", a.token).send({ companyId: companyA });
+    const created = await client.post("/api/campaigns", a.token).send({ companyId: companyA, launch: true });
     expect(created.status).toBe(201);
     const campaignA = created.body.campaign.id;
     const sendA = created.body.drafts[0].id;
@@ -114,7 +114,7 @@ describe("tenant isolation", () => {
     expect((await client.patch(`/api/companies/${companyA}`, b.token).send({ name: "pwned" })).status).toBe(404);
     expect((await client.get(`/api/campaigns/preview/${companyA}`, b.token)).status).toBe(404);
     expect((await client.get(`/api/campaigns/matches/${companyA}`, b.token)).status).toBe(404);
-    expect((await client.post("/api/campaigns", b.token).send({ companyId: companyA })).status).toBe(404);
+    expect((await client.post("/api/campaigns", b.token).send({ companyId: companyA, launch: true })).status).toBe(404);
     expect((await client.get(`/api/campaigns/${campaignA}`, b.token)).status).toBe(404);
     expect((await client.post(`/api/sends/campaigns/${campaignA}/dispatch`, b.token)).status).toBe(404);
     expect((await client.post(`/api/campaigns/${campaignA}/status`, b.token).send({ action: "cancel" })).status).toBe(404);
@@ -169,7 +169,7 @@ describe("campaigns and the free plan", () => {
     const u = await createUser(signToken);
     const company = await createCompany(u.id);
 
-    const created = await client.post("/api/campaigns", u.token).send({ companyId: company });
+    const created = await client.post("/api/campaigns", u.token).send({ companyId: company, launch: true });
     expect(created.status).toBe(201);
     expect(created.body.campaign.tier).toBe("FREE");
     expect(created.body.selectedCount).toBe(30);
@@ -181,14 +181,14 @@ describe("campaigns and the free plan", () => {
     expect(forged.status).toBe(402);
 
     // FREE: one active campaign, and the allowance is already fully drafted.
-    const second = await client.post("/api/campaigns", u.token).send({ companyId: company });
+    const second = await client.post("/api/campaigns", u.token).send({ companyId: company, launch: true });
     expect(second.status).toBe(402);
     expect(second.body.upgradeRequired).toBe(true);
 
     // Cancelling releases unsent drafts back to the allowance.
     const cancel = await client.post(`/api/campaigns/${created.body.campaign.id}/status`, u.token).send({ action: "cancel" });
     expect(cancel.body.cancelledSends).toBe(30);
-    const again = await client.post("/api/campaigns", u.token).send({ companyId: company });
+    const again = await client.post("/api/campaigns", u.token).send({ companyId: company, launch: true });
     expect(again.status).toBe(201);
     expect(again.body.selectedCount).toBe(30);
   });
@@ -200,12 +200,12 @@ describe("campaigns and the free plan", () => {
     await connectGmail(u.id, encrypted, 5);
     const company = await createCompany(u.id);
 
-    const first = await client.post("/api/campaigns", u.token).send({ companyId: company });
+    const first = await client.post("/api/campaigns", u.token).send({ companyId: company, launch: true });
     expect(first.body.selectedCount).toBe(40);
     expect(first.body.campaign.tier).toBe("STARTER");
     await client.post(`/api/sends/campaigns/${first.body.campaign.id}/dispatch`, u.token);
 
-    const second = await client.post("/api/campaigns", u.token).send({ companyId: company });
+    const second = await client.post("/api/campaigns", u.token).send({ companyId: company, launch: true });
     expect(second.status).toBe(422);
     expect(second.body.error).toMatch(/already contacted every investor/);
   });
@@ -216,7 +216,7 @@ describe("campaigns and the free plan", () => {
     generatePersonalizedEmail.mockRejectedValue(new AIProviderUnavailableError("email", ["groq"]));
     const u = await createUser(signToken);
     const company = await createCompany(u.id);
-    const res = await client.post("/api/campaigns", u.token).send({ companyId: company });
+    const res = await client.post("/api/campaigns", u.token).send({ companyId: company, launch: true });
     expect(res.status).toBe(503);
     expect((await pool.query("SELECT COUNT(*)::int AS n FROM campaigns WHERE user_id = $1", [u.id])).rows[0].n).toBe(0);
   });
@@ -225,7 +225,7 @@ describe("campaigns and the free plan", () => {
     await seedInvestors(1);
     const u = await createUser(signToken);
     const company = await createCompany(u.id);
-    const created = await client.post("/api/campaigns", u.token).send({ companyId: company });
+    const created = await client.post("/api/campaigns", u.token).send({ companyId: company, launch: true });
     const sendId = created.body.drafts[0].id;
     const edit = await client.patch(`/api/sends/${sendId}`, u.token).send({ subject: "Hello\r\nBcc: victim@x.test", bodyText: "New body" });
     expect(edit.status).toBe(200);
@@ -238,7 +238,7 @@ describe("dispatch, warm-up and quota", () => {
     await seedInvestors(50);
     const u = await createUser(signToken);
     const company = await createCompany(u.id);
-    const campaign = (await client.post("/api/campaigns", u.token).send({ companyId: company })).body.campaign.id;
+    const campaign = (await client.post("/api/campaigns", u.token).send({ companyId: company, launch: true })).body.campaign.id;
 
     const noGmail = await client.post(`/api/sends/campaigns/${campaign}/dispatch`, u.token);
     expect(noGmail.status).toBe(400);
@@ -262,7 +262,7 @@ describe("dispatch, warm-up and quota", () => {
     const campaigns = await client.get("/api/campaigns", u.token);
     expect(campaigns.body[0]).toMatchObject({ status: "COMPLETED", counts: { sent: 30, queued: 0 } });
 
-    expect((await client.post("/api/campaigns", u.token).send({ companyId: company })).status).toBe(402);
+    expect((await client.post("/api/campaigns", u.token).send({ companyId: company, launch: true })).status).toBe(402);
   });
 
   it("caps day 1-3 at 50/day, then 150/day; replies and bounces still count toward today", async () => {
@@ -271,7 +271,7 @@ describe("dispatch, warm-up and quota", () => {
     await setSubscription(u.id, "STARTER", { periodEndDays: null });
     await connectGmail(u.id, encrypted, 0); // warm-up day 1
     const company = await createCompany(u.id);
-    const campaign = (await client.post("/api/campaigns", u.token).send({ companyId: company })).body.campaign.id;
+    const campaign = (await client.post("/api/campaigns", u.token).send({ companyId: company, launch: true })).body.campaign.id;
 
     const day1 = await client.post(`/api/sends/campaigns/${campaign}/dispatch`, u.token);
     expect(day1.body.dispatched).toBe(50);
@@ -300,7 +300,7 @@ describe("dispatch, warm-up and quota", () => {
     const u = await createUser(signToken);
     await connectGmail(u.id, encrypted, 10);
     const company = await createCompany(u.id);
-    const campaign = (await client.post("/api/campaigns", u.token).send({ companyId: company })).body.campaign.id;
+    const campaign = (await client.post("/api/campaigns", u.token).send({ companyId: company, launch: true })).body.campaign.id;
 
     deliverEmail
       .mockResolvedValueOnce({ delivered: true, via: "gmail_api", messageId: "a", threadId: "a" })
@@ -331,7 +331,7 @@ describe("dispatch, warm-up and quota", () => {
     const u = await createUser(signToken);
     await connectGmail(u.id, encrypted, 10);
     const company = await createCompany(u.id);
-    const campaign = (await client.post("/api/campaigns", u.token).send({ companyId: company })).body.campaign.id;
+    const campaign = (await client.post("/api/campaigns", u.token).send({ companyId: company, launch: true })).body.campaign.id;
 
     expect((await client.post(`/api/campaigns/${campaign}/status`, u.token).send({ action: "pause" })).status).toBe(200);
     expect((await client.post(`/api/campaigns/${campaign}/status`, u.token).send({ action: "pause" })).status).toBe(409);
@@ -346,7 +346,7 @@ describe("dispatch, warm-up and quota", () => {
     await setSubscription(u.id, "GROWTH", { periodEndDays: 30, periodStartDaysAgo: 1 });
     await connectGmail(u.id, encrypted, 10);
     const company = await createCompany(u.id);
-    const campaign = (await client.post("/api/campaigns", u.token).send({ companyId: company })).body.campaign.id;
+    const campaign = (await client.post("/api/campaigns", u.token).send({ companyId: company, launch: true })).body.campaign.id;
     expect((await pool.query("SELECT COUNT(*)::int AS n FROM email_sends WHERE campaign_id = $1", [campaign])).rows[0].n).toBe(60);
 
     await pool.query("UPDATE subscriptions SET current_period_end = now() - interval '1 minute' WHERE user_id = $1", [u.id]);
@@ -441,5 +441,16 @@ describe("rate limiting", () => {
       last = (await request(app).post("/api/auth/login").set("X-Forwarded-For", "10.99.0.2").send({ email: "x@example.com", password: "wrong" })).status;
     }
     expect(last).toBe(429);
+  });
+});
+
+describe("CORS", () => {
+  it("allows every method the frontend uses from the configured origin (incl. PUT for profile autosave)", async () => {
+    const request = (await import("supertest")).default;
+    const res = await request(app).options("/api/company-profile/x/sections/overview").set("Origin", "http://localhost:3000").set("Access-Control-Request-Method", "PUT");
+    expect(res.status).toBe(204);
+    for (const m of ["GET", "POST", "PUT", "PATCH", "DELETE"]) expect(res.headers["access-control-allow-methods"]).toContain(m);
+    const foreign = await request(app).options("/api/companies").set("Origin", "https://evil.example").set("Access-Control-Request-Method", "GET");
+    expect(foreign.headers["access-control-allow-origin"]).toBeUndefined();
   });
 });
