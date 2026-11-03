@@ -35,6 +35,15 @@ CREATE TABLE IF NOT EXISTS leads (
   status TEXT NOT NULL DEFAULT 'NEW',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Older deployments created a smaller leads table for the original enterprise form.
+-- Add the newer columns without rewriting or deleting existing enquiries.
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS company TEXT;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS website TEXT;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS team_size TEXT;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS outreach_volume TEXT;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS message TEXT;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'NEW';
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS source TEXT;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_status_check;
