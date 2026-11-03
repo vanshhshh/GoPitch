@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { requireAuth } from "../lib/auth";
 import { pool } from "../lib/db";
+import { buildGmailConsentUrl, confirmGmailConnection, disconnectGmail, userHasReplyTrackingScope } from "./googleAuth";
 
 export const profileRouter = Router();
 profileRouter.use(requireAuth);
@@ -20,7 +21,9 @@ profileRouter.get("/me", async (req, res) => {
     email: u.email,
     name: u.name,
     role: u.role,
-    gmailConnected: !!(u.gmail_connected_at || u.google_refresh_token),
+    // Connected means we hold a usable credential — not merely that a timestamp exists.
+    gmailConnected: !!u.google_refresh_token,
+    replyTrackingEnabled: userHasReplyTrackingScope(u.gmail_granted_scopes),
     connectedGmailAddress: u.connected_gmail_address,
     gmailConnectedAt: u.gmail_connected_at,
     sendReputationScore: u.send_reputation_score,
@@ -31,7 +34,7 @@ profileRouter.get("/me", async (req, res) => {
   });
 });
 
-const updateProfileSchema = z.object({ name: z.string().min(1).max(100) });
+const updateProfileSchema = z.object({ name: z.string().trim().min(1, "Name is required.").max(100) });
 
 profileRouter.patch("/me", async (req, res) => {
   const parsed = updateProfileSchema.safeParse(req.body);
@@ -40,8 +43,38 @@ profileRouter.patch("/me", async (req, res) => {
   res.json({ ok: true });
 });
 
+/** Starts Gmail connection. Authenticated via the Authorization header — no token in any URL. */
+profileRouter.post("/gmail/connect", async (req, res) => {
+  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+    return res.status(503).json({ error: "Gmail connection isn't configured on this server yet." });
+  }
+  res.json({ url: await buildGmailConsentUrl(req.auth!.userId) });
+});
+
+const CONFIRM_ERRORS: Record<string, { status: number; error: string }> = {
+  invalid_or_expired: { status: 410, error: "This Gmail connection attempt expired. Please connect again." },
+  account_mismatch: {
+    status: 403,
+    error: "This Gmail authorization was started from a different GoPitch account. Sign in to that account, or connect again from here.",
+  },
+  no_refresh_token: {
+    status: 400,
+    error: "Google didn't return offline access. Remove GoPitch from your Google account's third-party access, then connect again.",
+  },
+};
+
+/** Second half of Gmail connection: attaches the parked tokens to the logged-in account. */
+profileRouter.post("/gmail/confirm", async (req, res) => {
+  const nonce = typeof req.body?.nonce === "string" ? req.body.nonce : "";
+  const result = await confirmGmailConnection(nonce, req.auth!.userId);
+  if (!result.ok) {
+    const { status, error } = CONFIRM_ERRORS[result.reason]!;
+    return res.status(status).json({ error, reason: result.reason });
+  }
+  res.json({ ok: true, connectedGmailAddress: result.gmailAddress });
+});
+
 profileRouter.post("/disconnect-gmail", async (req, res) => {
-  const { disconnectGmail } = await import("./googleAuth");
   await disconnectGmail(req.auth!.userId);
   res.json({ ok: true });
 });

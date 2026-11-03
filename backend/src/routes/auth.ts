@@ -2,14 +2,23 @@ import { Router } from "express";
 import { z } from "zod";
 import { pool } from "../lib/db";
 import { hashPassword, verifyPassword, signToken, requireAuth } from "../lib/auth";
+import { exchangeSignInCode } from "./googleAuth";
 
 export const authRouter = Router();
 
 const signupSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(8, "Password must be at least 8 characters."),
-  name: z.string().min(1, "Name is required.").max(100),
+  email: z.string().trim().email("Enter a valid email address.").max(254),
+  password: z
+    .string()
+    .min(8, "Password must be at least 8 characters.")
+    .max(128, "Password must be at most 128 characters.")
+    .refine((p) => /[A-Za-z]/.test(p) && /[0-9]/.test(p), "Password must contain at least one letter and one number."),
+  name: z.string().trim().min(1, "Name is required.").max(100),
 });
+
+async function hasCompany(userId: string): Promise<boolean> {
+  return (await pool.query("SELECT 1 FROM companies WHERE user_id = $1 LIMIT 1", [userId])).rows.length > 0;
+}
 
 authRouter.post("/signup", async (req, res) => {
   const parsed = signupSchema.safeParse(req.body);
@@ -24,18 +33,21 @@ authRouter.post("/signup", async (req, res) => {
   }
 
   const passwordHash = await hashPassword(password);
+  // ON CONFLICT closes the race where two simultaneous signups both pass the check above.
   const result = await pool.query(
-    `INSERT INTO users (email, password_hash, name, role) VALUES ($1, $2, $3, 'FOUNDER') RETURNING id, email, name, role`,
+    `INSERT INTO users (email, password_hash, name, role) VALUES ($1, $2, $3, 'FOUNDER')
+     ON CONFLICT (email) DO NOTHING RETURNING id, email, name, role`,
     [email.toLowerCase(), passwordHash, name]
   );
   const user = result.rows[0];
+  if (!user) return res.status(409).json({ error: "An account with this email already exists." });
   const token = signToken({ userId: user.id, role: user.role });
-  res.status(201).json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role } });
+  res.status(201).json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role, hasCompany: false } });
 });
 
 const loginSchema = z.object({
-  email: z.string().email(),
-  password: z.string(),
+  email: z.string().trim().email(),
+  password: z.string().min(1).max(128),
 });
 
 authRouter.post("/login", async (req, res) => {
@@ -60,7 +72,16 @@ authRouter.post("/login", async (req, res) => {
   }
 
   const token = signToken({ userId: user.id, role: user.role });
-  res.json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role } });
+  res.json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role, hasCompany: await hasCompany(user.id) } });
+});
+
+/** Second half of Google Sign-In: trades the one-time code from the redirect for a session. */
+authRouter.post("/google/exchange", async (req, res) => {
+  const code = typeof req.body?.code === "string" ? req.body.code : "";
+  const exchanged = await exchangeSignInCode(code);
+  if (!exchanged) return res.status(401).json({ error: "This sign-in link has expired. Please sign in again." });
+  const { token, user } = exchanged;
+  res.json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role, hasCompany: await hasCompany(user.id) } });
 });
 
 authRouter.get("/me", requireAuth, async (req, res) => {
@@ -69,14 +90,13 @@ authRouter.get("/me", requireAuth, async (req, res) => {
     [req.auth!.userId]
   );
   const user = result.rows[0];
-  if (!user) return res.status(404).json({ error: "User not found." });
+  if (!user) return res.status(401).json({ error: "This account no longer exists." });
 
-  const companyResult = await pool.query("SELECT id FROM companies WHERE user_id = $1 LIMIT 1", [req.auth!.userId]);
   res.json({
     id: user.id,
     email: user.email,
     name: user.name,
     role: user.role,
-    hasCompany: companyResult.rows.length > 0,
+    hasCompany: await hasCompany(user.id),
   });
 });

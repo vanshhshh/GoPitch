@@ -3,8 +3,10 @@ import { z } from "zod";
 import multer from "multer";
 import { pool } from "../lib/db";
 import { requireAuth, requireAdmin } from "../lib/auth";
+import { resolveEntitlementTier } from "../services/pricingService";
 import { publicWriteRateLimiter } from "../lib/rateLimiters";
 import { checkGmailRepliesForAllUsers } from "../services/gmailWatcher";
+import { probeAIProviders } from "../lib/llmService";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -98,17 +100,39 @@ adminRouter.get("/analytics", async (_req, res) => {
 
 // ---------- Investor management ----------
 
+const investorListSchema = z.object({
+  verified: z.enum(["true", "false"]).optional(),
+  enrichment: z.enum(["needed", "complete"]).optional(),
+  q: z.string().trim().max(100).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+/** Paginated + searchable (the table holds thousands of rows; it used to silently stop at 500). */
 adminRouter.get("/investors", async (req, res) => {
-  const verified = req.query.verified as string | undefined;
-  let query = "SELECT * FROM investors";
+  const parsed = investorListSchema.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid query." });
+  const { verified, enrichment, q, page, pageSize } = parsed.data;
+
+  const where: string[] = [];
   const params: any[] = [];
-  if (verified === "true" || verified === "false") {
-    query += " WHERE is_verified = $1";
+  if (verified) {
     params.push(verified === "true");
+    where.push(`is_verified = $${params.length}`);
   }
-  query += " ORDER BY created_at DESC LIMIT 500";
-  const result = await pool.query(query, params);
-  res.json(result.rows.map(toInvestorResponse));
+  if (enrichment) where.push(enrichment === "needed" ? "needs_enrichment = true" : "needs_enrichment = false");
+  if (q) {
+    params.push(`%${q.toLowerCase()}%`);
+    where.push(`(lower(name) LIKE $${params.length} OR lower(firm) LIKE $${params.length} OR lower(email) LIKE $${params.length})`);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const total = (await pool.query(`SELECT COUNT(*)::int AS n FROM investors ${whereSql}`, params)).rows[0].n;
+  params.push(pageSize, (page - 1) * pageSize);
+  const result = await pool.query(
+    `SELECT * FROM investors ${whereSql} ORDER BY created_at DESC, id LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params
+  );
+  res.json({ items: result.rows.map(toInvestorResponse), total, page, pageSize });
 });
 
 const createInvestorSchema = z.object({
@@ -206,9 +230,17 @@ adminRouter.patch("/investors/:id", async (req, res) => {
 });
 
 adminRouter.delete("/investors/:id", async (req, res) => {
-  const result = await pool.query("DELETE FROM investors WHERE id = $1 RETURNING id", [req.params.id]);
-  if (result.rows.length === 0) return res.status(404).json({ error: "Investor not found." });
-  res.json({ ok: true });
+  try {
+    const result = await pool.query("DELETE FROM investors WHERE id = $1 RETURNING id", [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: "Investor not found." });
+    res.json({ ok: true });
+  } catch (err: any) {
+    // Founders' outreach history references this investor; deleting it would orphan it.
+    if (err.code === "23503") {
+      return res.status(409).json({ error: "This investor has outreach history and can't be deleted. Unverify them instead." });
+    }
+    throw err;
+  }
 });
 
 /** Bulk import — accepts either a JSON array, or a raw CSV file upload matching the
@@ -300,18 +332,27 @@ adminRouter.post("/investors/:id/unverify", async (req, res) => {
 
 // ---------- User/campaign oversight ----------
 
-adminRouter.get("/users", async (_req, res) => {
+adminRouter.get("/users", async (req, res) => {
+  const q = typeof req.query.q === "string" ? req.query.q.trim().toLowerCase().slice(0, 100) : "";
   const result = await pool.query(
-    `SELECT u.id, u.email, u.role, u.created_at, u.send_reputation_score, u.complaint_reported_at,
+    `SELECT u.id, u.email, u.name, u.role, u.created_at, u.send_reputation_score, u.complaint_reported_at,
+            (u.google_refresh_token IS NOT NULL) AS gmail_connected,
+            s.tier AS subscription_tier, s.status AS subscription_status, s.current_period_end,
             COUNT(DISTINCT c.id)::int AS campaign_count
-     FROM users u LEFT JOIN campaigns c ON c.user_id = u.id
-     WHERE u.role = 'FOUNDER'
-     GROUP BY u.id ORDER BY u.created_at DESC`
+     FROM users u
+     LEFT JOIN campaigns c ON c.user_id = u.id
+     LEFT JOIN subscriptions s ON s.user_id = u.id
+     WHERE u.role = 'FOUNDER' AND ($1 = '' OR lower(u.email) LIKE '%' || $1 || '%' OR lower(coalesce(u.name, '')) LIKE '%' || $1 || '%')
+     GROUP BY u.id, s.tier, s.status, s.current_period_end ORDER BY u.created_at DESC LIMIT 500`,
+    [q]
   );
   res.json(
     result.rows.map((u) => ({
       id: u.id,
       email: u.email,
+      name: u.name,
+      gmailConnected: u.gmail_connected,
+      plan: resolveEntitlementTier({ tier: u.subscription_tier, status: u.subscription_status, current_period_end: u.current_period_end }),
       createdAt: u.created_at,
       sendReputationScore: u.send_reputation_score,
       complaintReportedAt: u.complaint_reported_at,
@@ -421,6 +462,52 @@ adminRouter.post("/support/:id/resolve", async (req, res) => {
   );
   if (result.rows.length === 0) return res.status(404).json({ error: "Message not found." });
   res.json({ ok: true });
+});
+
+// ---------- Enterprise enquiries (sales workflow) ----------
+
+adminRouter.get("/leads", async (req, res) => {
+  const status = typeof req.query.status === "string" ? req.query.status : "";
+  const result = await pool.query(
+    `SELECT l.*, u.email AS account_email FROM leads l LEFT JOIN users u ON u.id = l.user_id
+     WHERE ($1 = '' OR l.status = $1) ORDER BY l.created_at DESC LIMIT 500`,
+    [status]
+  );
+  res.json(
+    result.rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      company: r.company,
+      email: r.email,
+      phone: r.phone,
+      website: r.website,
+      teamSize: r.team_size,
+      outreachVolume: r.outreach_volume,
+      message: r.message,
+      source: r.source,
+      status: r.status,
+      accountEmail: r.account_email,
+      createdAt: r.created_at,
+    }))
+  );
+});
+
+const leadStatusSchema = z.object({ status: z.enum(["NEW", "CONTACTED", "QUALIFIED", "CLOSED"]) });
+
+adminRouter.patch("/leads/:id", async (req, res) => {
+  const parsed = leadStatusSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Invalid status." });
+  const result = await pool.query("UPDATE leads SET status = $1, updated_at = now() WHERE id = $2 RETURNING id, status", [
+    parsed.data.status,
+    req.params.id,
+  ]);
+  if (result.rows.length === 0) return res.status(404).json({ error: "Enquiry not found." });
+  res.json(result.rows[0]);
+});
+
+/** Live AI provider check — sends a tiny prompt to each configured provider. */
+adminRouter.get("/ai-health", async (_req, res) => {
+  res.json({ providers: await probeAIProviders(), checkedAt: new Date().toISOString() });
 });
 
 adminRouter.post("/gmail/check-replies", async (_req, res) => {

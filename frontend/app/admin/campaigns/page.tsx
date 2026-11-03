@@ -21,7 +21,7 @@ export default function AdminCampaignsPage() {
   }, []);
 
   return (
-    <div className="max-w-4xl mx-auto px-8 py-10">
+    <div className="max-w-4xl mx-auto px-4 sm:px-8 py-10">
       <h1 className="font-display text-2xl mb-1">Campaigns</h1>
       <p className="text-ink-soft text-sm mb-8">Every outreach campaign across every founder.</p>
 

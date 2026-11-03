@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import toast from "react-hot-toast";
 import { api, ApiError } from "@/lib/api";
+import { Pagination } from "@/components/Pagination";
 
 interface Investor {
   id: string;
@@ -23,26 +24,55 @@ interface Investor {
   needsEnrichment: boolean;
 }
 
-type Filter = "unverified" | "all";
+type Filter = "unverified" | "enrichment" | "matchable" | "all";
+
+const FILTER_QUERY: Record<Filter, string> = {
+  unverified: "verified=false",
+  enrichment: "enrichment=needed",
+  matchable: "verified=true&enrichment=complete",
+  all: "",
+};
+const PAGE_SIZE = 50;
 
 export default function AdminInvestorsPage() {
   const [investors, setInvestors] = useState<Investor[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
+  const [query, setQuery] = useState("");
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("unverified");
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<Investor | null>(null);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    const t = setTimeout(() => (setQuery(search.trim()), setPage(1)), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
   function refresh() {
-    const query = filter === "unverified" ? "?verified=false" : "";
-    api.get<Investor[]>(`/api/admin/investors${query}`).then(setInvestors);
+    const params = new URLSearchParams(FILTER_QUERY[filter]);
+    params.set("page", String(page));
+    params.set("pageSize", String(PAGE_SIZE));
+    if (query) params.set("q", query);
+    api
+      .get<{ items: Investor[]; total: number }>(`/api/admin/investors?${params}`)
+      .then((r) => (setInvestors(r.items), setTotal(r.total), setLoadError(null)))
+      .catch((err) => setLoadError(err instanceof ApiError ? err.message : "Couldn't load investors."));
   }
-  useEffect(refresh, [filter]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(refresh, [filter, page, query]);
 
   async function verify(id: string) {
-    await api.post(`/api/admin/investors/${id}/verify`);
-    toast.success("Verified.");
-    refresh();
+    try {
+      await api.post(`/api/admin/investors/${id}/verify`);
+      toast.success("Verified.");
+      refresh();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't verify.");
+    }
   }
 
   async function handleDelete(id: string) {
@@ -74,8 +104,8 @@ export default function AdminInvestorsPage() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto px-8 py-10">
-      <div className="flex items-center justify-between mb-1">
+    <div className="max-w-4xl mx-auto px-4 sm:px-8 py-10">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-1">
         <h1 className="font-display text-2xl">Investors</h1>
         <div className="flex gap-2">
           <label className="btn-secondary cursor-pointer">
@@ -98,20 +128,27 @@ export default function AdminInvestorsPage() {
         (no real stage/sector/geography data) are excluded from matching automatically.
       </p>
 
-      <div className="flex gap-2 mb-6 text-sm">
-        <button
-          onClick={() => setFilter("unverified")}
-          className={`px-3 py-1 rounded ${filter === "unverified" ? "bg-verified-soft text-verified" : "text-ink-soft"}`}
-        >
-          Pending verification
-        </button>
-        <button
-          onClick={() => setFilter("all")}
-          className={`px-3 py-1 rounded ${filter === "all" ? "bg-verified-soft text-verified" : "text-ink-soft"}`}
-        >
-          All investors
-        </button>
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-6 text-sm">
+        <div className="flex flex-wrap gap-2">
+          {([
+            ["unverified", "Pending verification"],
+            ["enrichment", "Needs enrichment"],
+            ["matchable", "Matchable"],
+            ["all", "All investors"],
+          ] as [Filter, string][]).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => (setFilter(key), setPage(1))}
+              className={`px-3 py-1 rounded ${filter === key ? "bg-verified-soft text-verified" : "text-ink-soft hover:text-ink"}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <input className="input-field sm:max-w-xs sm:ml-auto" placeholder="Search name, fund or email" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search investors" />
       </div>
+      {loadError && <p className="text-sm text-danger mb-4">{loadError}</p>}
+      {investors && <p className="text-xs text-ink-soft mb-2">{total.toLocaleString()} investors</p>}
 
       {showForm && (
         <InvestorForm
@@ -177,6 +214,7 @@ export default function AdminInvestorsPage() {
           ))}
         </div>
       )}
+      <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPage={setPage} />
     </div>
   );
 }

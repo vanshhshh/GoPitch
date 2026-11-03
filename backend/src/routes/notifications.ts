@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { pool } from "../lib/db";
+import { pool, Queryable } from "../lib/db";
 import { requireAuth } from "../lib/auth";
 
 export const notificationRouter = Router();
@@ -11,6 +11,14 @@ notificationRouter.get("/", async (req, res) => {
     [req.auth!.userId]
   );
   res.json(result.rows.map(toResponse));
+});
+
+/** Cheap badge count for the sidebar — avoids downloading 100 notifications on every navigation. */
+notificationRouter.get("/unread-count", async (req, res) => {
+  const result = await pool.query("SELECT COUNT(*)::int AS n FROM notifications WHERE user_id = $1 AND read_at IS NULL", [
+    req.auth!.userId,
+  ]);
+  res.json({ unread: result.rows[0].n });
 });
 
 notificationRouter.post("/:id/read", async (req, res) => {
@@ -30,10 +38,18 @@ notificationRouter.post("/read-all", async (req, res) => {
 });
 
 /** Internal helper other routes call to create a notification — not exposed directly. */
-export async function createNotification(userId: string, type: string, title: string, body?: string) {
-  await pool.query(
+export async function createNotification(userId: string, type: string, title: string, body?: string, db: Queryable = pool) {
+  await db.query(
     "INSERT INTO notifications (user_id, type, title, body) VALUES ($1,$2,$3,$4)",
     [userId, type, title, body ?? null]
+  );
+}
+
+/** Notifies every admin account (e.g. a new enterprise enquiry for the sales workflow). */
+export async function notifyAdmins(type: string, title: string, body?: string, db: Queryable = pool) {
+  await db.query(
+    `INSERT INTO notifications (user_id, type, title, body) SELECT id, $1, $2, $3 FROM users WHERE role = 'ADMIN'`,
+    [type, title, body ?? null]
   );
 }
 

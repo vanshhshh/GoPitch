@@ -115,7 +115,7 @@ function Hero() {
         GoPitch helps founders create a fundraising deck, find relevant investors by stage and thesis,
         connect Gmail, and send personalized investor outreach from their own account.
       </motion.p>
-      <motion.div variants={fadeUp} initial="hidden" animate="show" custom={4} className="flex items-center justify-center gap-4">
+      <motion.div variants={fadeUp} initial="hidden" animate="show" custom={4} className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4">
         <Link href="/signup" className="btn-primary text-base px-6 py-3">
           Start your raise
         </Link>
@@ -131,10 +131,11 @@ function Hero() {
         custom={5}
         className="mt-16 card p-6 max-w-md mx-auto text-left"
       >
+        <p className="label mb-3">Example match preview</p>
         <div className="flex items-center gap-3 mb-4">
           <MatchStamp score={82} size={40} />
           <div>
-            <p className="text-sm font-medium">Rishen Kapoor · Peak XV Partners</p>
+            <p className="text-sm font-medium">Partner · Seed-stage fintech fund</p>
             <p className="text-xs text-ink-soft">Sector thesis overlap: fintech, cross-border</p>
           </div>
         </div>
@@ -142,7 +143,7 @@ function Hero() {
         <div className="flex items-center gap-3">
           <MatchStamp score={58} size={40} />
           <div>
-            <p className="text-sm font-medium">Sarita Rao · Blume Ventures</p>
+            <p className="text-sm font-medium">Principal · Early-stage SaaS fund</p>
             <p className="text-xs text-ink-soft">Invests directly at seed stage</p>
           </div>
         </div>
@@ -291,7 +292,7 @@ function FinalCTA() {
   return (
     <section className="max-w-3xl mx-auto px-6 py-20 text-center">
       <h2 className="font-display text-3xl mb-4">Ready to start?</h2>
-      <p className="text-ink-soft mb-8">No credit card for the first deck and match list.</p>
+      <p className="text-ink-soft mb-8">Start free: upload your deck, see your matches, and send up to 30 personalized emails. No card needed.</p>
       <Link href="/signup" className="btn-primary text-base px-8 py-3">
         Start your raise
       </Link>

@@ -9,19 +9,19 @@ vi.mock("../src/lib/db", () => ({
 
 vi.mock("../src/routes/googleAuth", () => ({
   getGmailClientForUser: vi.fn(),
-  userHasGmailModifyScope: vi.fn(),
+  userHasReplyTrackingScope: vi.fn(),
 }));
 
 import { pool } from "../src/lib/db";
-import { getGmailClientForUser, userHasGmailModifyScope } from "../src/routes/googleAuth";
+import { getGmailClientForUser, userHasReplyTrackingScope } from "../src/routes/googleAuth";
 
 const mockPoolQuery = vi.mocked(pool.query);
 const mockGetGmailClientForUser = vi.mocked(getGmailClientForUser);
-const mockUserHasGmailModifyScope = vi.mocked(userHasGmailModifyScope);
+const mockUserHasReplyTrackingScope = vi.mocked(userHasReplyTrackingScope);
 
 function setupPoolMocks(returns: any[]) {
   vi.clearAllMocks();
-  mockUserHasGmailModifyScope.mockReturnValue(true);
+  mockUserHasReplyTrackingScope.mockReturnValue(true);
   for (const r of returns) {
     mockPoolQuery.mockResolvedValueOnce(r);
   }
@@ -35,11 +35,11 @@ describe("checkGmailRepliesForUser", () => {
     expect(result.replied).toBe(0);
   });
 
-  it("returns early when user lacks gmail.modify scope", async () => {
-    mockUserHasGmailModifyScope.mockReturnValue(false);
+  it("returns early when user has not granted reply-tracking scope", async () => {
+    mockUserHasReplyTrackingScope.mockReturnValue(false);
     mockPoolQuery.mockResolvedValueOnce({ rows: [{ google_refresh_token: "encrypted" }] } as any);
     const result = await checkGmailRepliesForUser("user-1");
-    expect(result.errors).toContain("Insufficient Gmail scope — user needs to reconnect with gmail.modify.");
+    expect(result.errors).toContain("Reply tracking not granted — user needs to reconnect Gmail to enable it.");
   });
 
   it("marks outreach as REPLIED when investor replies in thread", async () => {

@@ -1,296 +1,376 @@
 import { Router } from "express";
 import { z } from "zod";
-import { pool } from "../lib/db";
+import { pool, Queryable, withUserLock } from "../lib/db";
 import { requireAuth } from "../lib/auth";
-import { rankInvestors, resolveMatchingKeywords, CompanyProfile, InvestorProfile, WarmthRecord } from "../services/matchingService";
+import { rankInvestors, resolveMatchingKeywords, CompanyProfile, InvestorProfile, WarmthRecord, MatchResult } from "../services/matchingService";
 import { AIProviderUnavailableError, generatePersonalizedEmail, isAIFeatureAvailable } from "../lib/llmService";
 import { authorizeCampaignTier, PRICING_TIERS } from "../services/pricingService";
+import { loadEntitlement } from "../services/entitlementService";
 import { createNotification } from "./notifications";
+import { markCampaignCompletedIfDone } from "./sends";
 
 export const campaignRouter = Router();
 campaignRouter.use(requireAuth);
 
 const createCampaignSchema = z.object({
-  companyId: z.string(),
-  tier: z.enum(["STARTER", "GROWTH", "ENTERPRISE"]),
+  companyId: z.string().min(1),
+  // Optional and advisory: the tier the client believes the founder is on. The campaign
+  // always uses the founder's real entitlement; a higher requested tier is refused.
+  tier: z.enum(["FREE", "STARTER", "GROWTH", "ENTERPRISE"]).optional(),
 });
 
-campaignRouter.get("/preview/:companyId", async (req, res) => {
-  const userId = req.auth!.userId;
-  const companyResult = await pool.query("SELECT * FROM companies WHERE id = $1 AND user_id = $2", [
-    req.params.companyId,
-    userId,
-  ]);
-  const companyRow = companyResult.rows[0];
-  if (!companyRow) return res.status(404).json({ error: "Company not found." });
+/** Same normalization as the "funds matched" count, so one fund under two spellings counts once. */
+function fundKey(firm: string | null | undefined): string {
+  return (firm || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
 
-  const effectiveKeywords = resolveMatchingKeywords(companyRow.extracted_keywords, companyRow.sector);
-  if (!effectiveKeywords || effectiveKeywords.length === 0) {
-    return res.status(400).json({ error: "Add at least one sector tag before previewing investors." });
-  }
+interface RankedCompany {
+  company: any;
+  investors: Map<string, InvestorProfile>;
+  ranked: MatchResult[];
+  alreadyContacted: Set<string>;
+}
 
-  const verifiedRows = await pool.query("SELECT * FROM investors WHERE is_verified = true AND needs_enrichment = false");
-  const investors: InvestorProfile[] = verifiedRows.rows.map(toInvestorProfile);
-  const warmthRows = await pool.query("SELECT investor_id, status FROM investor_warmth WHERE user_id = $1", [userId]);
+/**
+ * Scores every matchable investor (verified, enriched) for one of the founder's companies.
+ * Returns null when the company doesn't exist or isn't theirs. Investors the founder has
+ * already emailed (or drafted for) in any campaign are flagged, so a new campaign never
+ * re-pitches them.
+ */
+async function rankForCompany(userId: string, companyId: string, db: Queryable = pool): Promise<RankedCompany | "no_keywords" | null> {
+  const company = (await db.query("SELECT * FROM companies WHERE id = $1 AND user_id = $2", [companyId, userId])).rows[0];
+  if (!company) return null;
+
+  const effectiveKeywords = resolveMatchingKeywords(company.extracted_keywords, company.sector);
+  if (!effectiveKeywords || effectiveKeywords.length === 0) return "no_keywords";
+
+  // needs_enrichment investors have no real stage/sector/geo data — they are excluded, not
+  // scored low, so a founder is never shown a "match" grounded in nothing.
+  const investorRows = await db.query("SELECT * FROM investors WHERE is_verified = true AND needs_enrichment = false");
+  const investors = new Map<string, InvestorProfile>(investorRows.rows.map((row) => [row.id, toInvestorProfile(row)]));
+
+  const warmthRows = await db.query("SELECT investor_id, status FROM investor_warmth WHERE user_id = $1", [userId]);
   const warmthMap = new Map<string, WarmthRecord>(
     warmthRows.rows.map((w) => [w.investor_id, { investorId: w.investor_id, status: w.status }])
   );
 
-  const companyProfile: CompanyProfile = {
-    stage: companyRow.stage,
-    sector: companyRow.sector,
-    geography: companyRow.geography,
-    askAmountUsd: companyRow.ask_amount_usd,
+  const contactedRows = await db.query(
+    "SELECT DISTINCT investor_id FROM email_sends WHERE user_id = $1 AND status <> 'CANCELLED'",
+    [userId]
+  );
+
+  const profile: CompanyProfile = {
+    stage: company.stage,
+    sector: company.sector,
+    geography: company.geography,
+    askAmountUsd: company.ask_amount_usd,
     extractedKeywords: effectiveKeywords,
   };
 
-  const ranked = rankInvestors(companyProfile, investors, warmthMap, 5);
-  const totalRanked = rankInvestors(companyProfile, investors, warmthMap, investors.length);
-  const totalMatches = totalRanked.length;
-  const totalFundsMatched = new Set(totalRanked.map((r) => investors.find((i) => i.id === r.investorId)?.firm).filter(Boolean)).size;
+  return {
+    company,
+    investors,
+    ranked: rankInvestors(profile, [...investors.values()], warmthMap, investors.size),
+    alreadyContacted: new Set(contactedRows.rows.map((r) => r.investor_id)),
+  };
+}
 
-  if (ranked.length > 0) {
-    const byId = new Map(investors.map((i) => [i.id, i]));
-    return res.json({
-      totalMatches,
-      totalFundsMatched,
-      mode: "verified",
-      investors: ranked.map((m) => {
-        const investor = byId.get(m.investorId)!;
-        return {
-          id: investor.id,
-          name: investor.name,
-          firm: investor.firm,
-          score: m.score,
-          reasons: m.reasons,
-        };
-      }),
-    });
-  }
+function toMatchResponse(match: MatchResult, investor: InvestorProfile, alreadyContacted: boolean) {
+  return {
+    id: investor.id,
+    name: investor.name,
+    firm: investor.firm,
+    score: match.score,
+    breakdown: match.breakdown,
+    reasons: match.reasons,
+    alreadyContacted,
+  };
+}
 
-  const fallback = await pool.query(
-    `SELECT id, name, firm FROM investors
-     WHERE id NOT IN (
-       SELECT investor_id FROM investor_warmth WHERE user_id = $1 AND status = 'REPLIED_PASS'
-     )
-     ORDER BY source_verified_at DESC, created_at ASC
-     LIMIT 5`,
-    [userId]
-  );
-  const total = await pool.query("SELECT count(*)::int AS total FROM investors");
+async function matchableInvestorCount(): Promise<number> {
+  return (
+    await pool.query("SELECT COUNT(*)::int AS n FROM investors WHERE is_verified = true AND needs_enrichment = false")
+  ).rows[0].n;
+}
+
+/** Overview: totals over ALL matches + the top 5. */
+campaignRouter.get("/preview/:companyId", async (req, res) => {
+  const userId = req.auth!.userId;
+  const ranking = await rankForCompany(userId, req.params.companyId);
+  if (!ranking) return res.status(404).json({ error: "Company not found." });
+  if (ranking === "no_keywords") return res.status(400).json({ error: "Add at least one sector tag before previewing investors." });
+
+  const { ranked, investors, alreadyContacted } = ranking;
+  const entitlement = await loadEntitlement(userId);
+  const newMatches = ranked.filter((m) => !alreadyContacted.has(m.investorId));
+
   res.json({
-    totalMatches: total.rows[0].total,
-    totalFundsMatched: 0,
-    mode: "imported",
-    investors: fallback.rows.map((i) => ({
-      id: i.id,
-      name: i.name,
-      firm: i.firm,
-      score: null,
-      reasons: ["Imported investor contact. Thesis enrichment is pending."],
-    })),
+    mode: "verified",
+    totalMatches: ranked.length,
+    totalFundsMatched: new Set(ranked.map((m) => fundKey(investors.get(m.investorId)?.firm))).size,
+    alreadyContactedCount: ranked.length - newMatches.length,
+    // How many of the matches the next campaign would actually draft for, given the plan.
+    nextCampaignSize: Math.min(newMatches.length, entitlement.quota.remainingToAllocate),
+    matchableInvestorCount: await matchableInvestorCount(),
+    entitlement: {
+      tier: entitlement.tier,
+      investorLimit: entitlement.quota.limit,
+      remainingToAllocate: entitlement.quota.remainingToAllocate,
+    },
+    investors: ranked.slice(0, 5).map((m) => toMatchResponse(m, investors.get(m.investorId)!, alreadyContacted.has(m.investorId))),
   });
 });
 
+const matchesQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25),
+  minScore: z.coerce.number().min(0).max(100).default(0),
+  q: z.string().trim().max(100).optional(),
+  hideContacted: z.enum(["true", "false"]).default("false"),
+});
+
+/** "View all matches": the complete ranked list, paginated and filterable. */
+campaignRouter.get("/matches/:companyId", async (req, res) => {
+  const parsed = matchesQuerySchema.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid query." });
+  const { page, pageSize, minScore, q, hideContacted } = parsed.data;
+
+  const ranking = await rankForCompany(req.auth!.userId, req.params.companyId);
+  if (!ranking) return res.status(404).json({ error: "Company not found." });
+  if (ranking === "no_keywords") return res.status(400).json({ error: "Add at least one sector tag before matching investors." });
+
+  const { ranked, investors, alreadyContacted } = ranking;
+  const needle = q?.toLowerCase();
+  const filtered = ranked.filter((m) => {
+    if (m.score < minScore) return false;
+    if (hideContacted === "true" && alreadyContacted.has(m.investorId)) return false;
+    if (needle) {
+      const inv = investors.get(m.investorId)!;
+      if (!inv.name.toLowerCase().includes(needle) && !inv.firm.toLowerCase().includes(needle)) return false;
+    }
+    return true;
+  });
+
+  res.json({
+    total: filtered.length,
+    totalMatches: ranked.length,
+    totalFundsMatched: new Set(ranked.map((m) => fundKey(investors.get(m.investorId)?.firm))).size,
+    page,
+    pageSize,
+    items: filtered
+      .slice((page - 1) * pageSize, page * pageSize)
+      .map((m) => toMatchResponse(m, investors.get(m.investorId)!, alreadyContacted.has(m.investorId))),
+  });
+});
+
+/** Runs async work over items with at most `limit` in flight. Keeps 100 AI calls from taking 100× as long. */
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index]!);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 /**
- * Creates a campaign: scores every verified investor against the company, takes the
- * top N for the tier, generates a personalized email for each, and queues them.
- * Nothing is actually sent here — sending is a separate step via /api/sends, gated by
- * sendScheduler.ts's rate limits. This route only does matching + drafting.
+ * Creates a campaign: takes the best-matched investors the founder hasn't contacted yet —
+ * as many as their remaining plan allowance permits — drafts a personalized email for
+ * each, and queues them. Nothing is sent here; sending is /api/sends/.../dispatch.
  */
 campaignRouter.post("/", async (req, res) => {
   const parsed = createCampaignSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input." });
   }
-  const { companyId, tier } = parsed.data;
+  const { companyId, tier: requestedTier } = parsed.data;
   const userId = req.auth!.userId;
 
-  const subscription = (
-    await pool.query("SELECT tier, status, current_period_end FROM subscriptions WHERE user_id = $1", [userId])
-  ).rows[0];
-  const authorization = authorizeCampaignTier(subscription, tier);
-  if (!authorization.allowed) {
-    return res.status(402).json({
-      error: authorization.reason,
-      entitlementTier: authorization.entitlementTier,
-      requiredTier: tier,
-    });
-  }
-
-  if (!isAIFeatureAvailable("email")) {
-    return res.status(503).json({
-      error: "AI email generation is not available right now. Draft emails manually or try again later.",
-      manualEmailRequired: true,
-    });
-  }
-
-  if (authorization.activeCampaignLimit !== null) {
-    const activeCampaigns = await pool.query(
-      "SELECT COUNT(*)::int AS count FROM campaigns WHERE user_id = $1 AND status = 'ACTIVE'",
-      [userId]
-    );
-    if (activeCampaigns.rows[0].count >= authorization.activeCampaignLimit) {
-      return res.status(403).json({
-        error: `Your ${authorization.entitlementTier} plan allows ${authorization.activeCampaignLimit} active campaign.`,
-        entitlementTier: authorization.entitlementTier,
-        activeCampaignLimit: authorization.activeCampaignLimit,
-      });
+  const outcome = await withUserLock("campaign_create", userId, async (db) => {
+    const entitlement = await loadEntitlement(userId, db);
+    const authorization = authorizeCampaignTier(entitlement.subscription, requestedTier);
+    if (!authorization.allowed) {
+      return { status: 402, body: { error: authorization.reason, entitlementTier: authorization.entitlementTier, upgradeRequired: true } };
     }
-  }
 
-  const companyResult = await pool.query("SELECT * FROM companies WHERE id = $1 AND user_id = $2", [
-    companyId,
-    userId,
-  ]);
-  const companyRow = companyResult.rows[0];
-  if (!companyRow) return res.status(404).json({ error: "Company not found." });
-
-  // A company that used the deck-upload fallback (no AI key configured) never gets
-  // extracted_keywords populated by generation — see resolveMatchingKeywords for why.
-  const effectiveKeywords = resolveMatchingKeywords(companyRow.extracted_keywords, companyRow.sector);
-
-  if (!effectiveKeywords || effectiveKeywords.length === 0) {
-    return res.status(400).json({
-      error: "Add at least one sector tag to your company profile before matching investors.",
-    });
-  }
-
-  const companyProfile: CompanyProfile = {
-    stage: companyRow.stage,
-    sector: companyRow.sector,
-    geography: companyRow.geography,
-    askAmountUsd: companyRow.ask_amount_usd,
-    extractedKeywords: effectiveKeywords,
-  };
-
-  // needs_enrichment investors have no real stage/sector/geo data (see importInvestors.ts) —
-  // excluding them here, not just scoring them low, so the matching list never shows a
-  // founder a "match" grounded in nothing.
-  const investorRows = await pool.query("SELECT * FROM investors WHERE is_verified = true AND needs_enrichment = false");
-  const investors: InvestorProfile[] = investorRows.rows.map(toInvestorProfile);
-
-  const warmthRows = await pool.query("SELECT investor_id, status FROM investor_warmth WHERE user_id = $1", [
-    userId,
-  ]);
-  const warmthMap = new Map<string, WarmthRecord>(
-    warmthRows.rows.map((w) => [w.investor_id, { investorId: w.investor_id, status: w.status }])
-  );
-
-  const limit = authorization.investorLimit;
-  let matches = rankInvestors(companyProfile, investors, warmthMap, limit);
-  let fallbackInvestors: InvestorProfile[] = [];
-
-  if (matches.length === 0) {
-    const fallbackRows = await pool.query(
-      `SELECT * FROM investors
-       WHERE id NOT IN (
-         SELECT investor_id FROM investor_warmth WHERE user_id = $1 AND status = 'REPLIED_PASS'
-       )
-       ORDER BY source_verified_at DESC, created_at ASC
-       LIMIT $2`,
-      [userId, limit]
-    );
-    fallbackInvestors = fallbackRows.rows.map((row) => ({
-      ...toInvestorProfile(row),
-      isVerified: true,
-    }));
-    matches = fallbackInvestors.map((investor) => ({
-      investorId: investor.id,
-      score: 10,
-      breakdown: { stageFit: 0, sectorFit: 0, geoFit: 0, checkSizeFit: 0, recencyFit: 0, warmthBonus: 0 },
-      reasons: ["Imported investor contact. Thesis enrichment is pending."],
-      excluded: false,
-    }));
-    if (matches.length === 0) {
-      return res.status(422).json({
-        error: "No investors are available yet. Import investor contacts or add investors in admin first.",
-      });
+    if (entitlement.quota.remainingToAllocate <= 0) {
+      return {
+        status: 402,
+        body: {
+          error:
+            entitlement.quota.remainingToSend > 0
+              ? `All ${entitlement.quota.limit} emails in your ${entitlement.tier} plan are already drafted in existing campaigns. Send those, or upgrade for more.`
+              : `You've used all ${entitlement.quota.limit} emails included in your ${entitlement.tier} plan. Upgrade to start a new campaign.`,
+          entitlementTier: entitlement.tier,
+          upgradeRequired: true,
+        },
+      };
     }
-  }
 
-  const investorById = new Map([...investors, ...fallbackInvestors].map((i) => [i.id, i]));
-  const userRow = (await pool.query("SELECT email, name FROM users WHERE id = $1", [userId])).rows[0];
-  const founderName = userRow.name || userRow.email.split("@")[0]; // fallback for accounts created before the name field existed
+    if (authorization.activeCampaignLimit !== null) {
+      const active = (
+        await db.query("SELECT COUNT(*)::int AS count FROM campaigns WHERE user_id = $1 AND status IN ('ACTIVE','PAUSED')", [userId])
+      ).rows[0].count;
+      if (active >= authorization.activeCampaignLimit) {
+        return {
+          status: 403,
+          body: {
+            error: `Your ${PRICING_TIERS[entitlement.tier].name} plan allows ${authorization.activeCampaignLimit} active campaign at a time. Finish or cancel the current one, or upgrade.`,
+            entitlementTier: entitlement.tier,
+            activeCampaignLimit: authorization.activeCampaignLimit,
+            upgradeRequired: true,
+          },
+        };
+      }
+    }
 
-  const generatedEmails = [];
-  for (const match of matches) {
-    const investor = investorById.get(match.investorId)!;
+    if (!isAIFeatureAvailable("email")) {
+      return { status: 503, body: { error: "AI email generation is not configured right now. Try again later.", manualEmailRequired: true } };
+    }
+
+    const ranking = await rankForCompany(userId, companyId, db);
+    if (!ranking) return { status: 404, body: { error: "Company not found." } };
+    if (ranking === "no_keywords") {
+      return { status: 400, body: { error: "Add at least one sector tag to your company profile before matching investors." } };
+    }
+
+    const { company, investors, ranked, alreadyContacted } = ranking;
+    const selected = ranked.filter((m) => !alreadyContacted.has(m.investorId)).slice(0, entitlement.quota.remainingToAllocate);
+    if (selected.length === 0) {
+      return {
+        status: 422,
+        body: {
+          error:
+            ranked.length > 0
+              ? "You've already contacted every investor that matches this company. New matches appear as the investor database grows."
+              : "No verified investors match this company's stage, sector and geography yet. Try broadening your sector tags.",
+          totalMatches: ranked.length,
+        },
+      };
+    }
+
+    const userRow = (await db.query("SELECT email, name FROM users WHERE id = $1", [userId])).rows[0];
+    const founderName = userRow.name || userRow.email.split("@")[0];
+
+    let generated;
     try {
-      const email = await generatePersonalizedEmail({
-        founderName,
-        companyName: companyRow.name,
-        oneLiner: companyRow.one_liner,
-        askAmountUsd: companyRow.ask_amount_usd,
-        investorName: investor.name,
-        investorFirm: investor.firm,
-        matchReasons: match.reasons,
+      generated = await mapWithConcurrency(selected, 5, async (match) => {
+        const investor = investors.get(match.investorId)!;
+        const email = await generatePersonalizedEmail({
+          founderName,
+          companyName: company.name,
+          oneLiner: company.one_liner,
+          askAmountUsd: company.ask_amount_usd,
+          investorName: investor.name,
+          investorFirm: investor.firm,
+          matchReasons: match.reasons,
+        });
+        return { match, investor, email };
       });
-      generatedEmails.push({ match, investor, email });
     } catch (err) {
       if (err instanceof AIProviderUnavailableError) {
-        return res.status(503).json({
-          error: "AI email generation is temporarily unavailable. Draft emails manually or try again later.",
-          manualEmailRequired: true,
-        });
+        return {
+          status: 503,
+          body: { error: "AI email generation is temporarily unavailable. Nothing was saved — try again in a few minutes.", manualEmailRequired: true },
+        };
       }
       throw err;
     }
-  }
 
-  const campaignResult = await pool.query(
-    `INSERT INTO campaigns (user_id, company_id, tier, matched_investor_ids) VALUES ($1,$2,$3,$4) RETURNING *`,
-    [userId, companyId, tier, matches.map((m) => m.investorId)]
-  );
-  const campaign = campaignResult.rows[0];
+    // Campaign + drafts are written atomically: either all drafts exist or none do.
+    await db.query("BEGIN");
+    try {
+      const campaign = (
+        await db.query(
+          `INSERT INTO campaigns (user_id, company_id, tier, matched_investor_ids) VALUES ($1,$2,$3,$4) RETURNING *`,
+          [userId, companyId, entitlement.tier, selected.map((m) => m.investorId)]
+        )
+      ).rows[0];
 
-  const draftedSends = [];
-  for (const { match, investor, email } of generatedEmails) {
-    const sendResult = await pool.query(
-      `INSERT INTO email_sends (campaign_id, user_id, investor_id, subject, body_text, match_score, scheduled_for)
-       VALUES ($1,$2,$3,$4,$5,$6, now()) RETURNING *`,
-      [campaign.id, userId, investor.id, email.subject, email.body, match.score]
-    );
-    draftedSends.push({ ...toSendResponse(sendResult.rows[0]), matchReasons: match.reasons, provider: email.provider });
-  }
+      const drafts = [];
+      for (const { match, investor, email } of generated) {
+        const row = (
+          await db.query(
+            `INSERT INTO email_sends (campaign_id, user_id, investor_id, subject, body_text, match_score, scheduled_for)
+             VALUES ($1,$2,$3,$4,$5,$6, now()) RETURNING *`,
+            [campaign.id, userId, investor.id, email.subject, email.body, match.score]
+          )
+        ).rows[0];
+        drafts.push({ ...toSendResponse(row), investorName: investor.name, investorFirm: investor.firm, matchReasons: match.reasons, provider: email.provider });
+      }
 
-  await createNotification(
-    userId,
-    "campaign_created",
-    `${matches.length} investors matched for ${companyRow.name}`,
-    `Your ${tier.toLowerCase()} campaign found ${matches.length} matched investors and drafted personalized outreach for each.`
-  );
+      await createNotification(
+        userId,
+        "campaign_created",
+        `${selected.length} outreach emails drafted for ${company.name}`,
+        `${ranked.length} investors matched; ${selected.length} selected for this campaign based on fit and your ${PRICING_TIERS[entitlement.tier].name} plan allowance.`,
+        db
+      );
+      await db.query("COMMIT");
 
-  res.status(201).json({
-    campaign: toCampaignResponse(campaign),
-    drafts: draftedSends,
-    tierInfo: PRICING_TIERS[tier],
-    entitlement: {
-      tier: authorization.entitlementTier,
-      investorLimit: authorization.investorLimit,
-      activeCampaignLimit: authorization.activeCampaignLimit,
-    },
+      return {
+        status: 201,
+        body: {
+          campaign: toCampaignResponse(campaign),
+          drafts,
+          totalMatches: ranked.length,
+          alreadyContactedCount: alreadyContacted.size,
+          selectedCount: selected.length,
+          tierInfo: PRICING_TIERS[entitlement.tier],
+          entitlement: {
+            tier: entitlement.tier,
+            investorLimit: entitlement.quota.limit,
+            remainingToAllocate: entitlement.quota.remainingToAllocate - selected.length,
+            activeCampaignLimit: authorization.activeCampaignLimit,
+          },
+        },
+      };
+    } catch (err) {
+      await db.query("ROLLBACK");
+      throw err;
+    }
   });
+
+  if (!outcome.acquired) {
+    return res.status(409).json({ error: "A campaign is already being created for your account. Wait for it to finish." });
+  }
+  res.status(outcome.result.status).json(outcome.result.body);
 });
 
 campaignRouter.get("/", async (req, res) => {
   const userId = req.auth!.userId;
   const result = await pool.query(
-    `SELECT c.*, comp.name AS company_name FROM campaigns c
+    `SELECT c.*, comp.name AS company_name,
+            COUNT(es.id)::int AS total_sends,
+            COUNT(es.id) FILTER (WHERE es.status = 'QUEUED')::int AS queued,
+            COUNT(es.id) FILTER (WHERE es.sent_at IS NOT NULL)::int AS sent,
+            COUNT(es.id) FILTER (WHERE es.status = 'FAILED')::int AS failed,
+            COUNT(es.id) FILTER (WHERE es.status = 'BOUNCED')::int AS bounced,
+            COUNT(es.id) FILTER (WHERE es.status = 'REPLIED')::int AS replied
+     FROM campaigns c
      JOIN companies comp ON comp.id = c.company_id
-     WHERE c.user_id = $1 ORDER BY c.created_at DESC`,
+     LEFT JOIN email_sends es ON es.campaign_id = c.id
+     WHERE c.user_id = $1
+     GROUP BY c.id, comp.name
+     ORDER BY c.created_at DESC`,
     [userId]
   );
-  res.json(result.rows.map((r) => ({ ...toCampaignResponse(r), companyName: r.company_name })));
+  res.json(
+    result.rows.map((r) => ({
+      ...toCampaignResponse(r),
+      companyName: r.company_name,
+      counts: { total: r.total_sends, queued: r.queued, sent: r.sent, failed: r.failed, bounced: r.bounced, replied: r.replied },
+    }))
+  );
 });
 
 campaignRouter.get("/:id", async (req, res) => {
   const userId = req.auth!.userId;
-  const campaignResult = await pool.query("SELECT * FROM campaigns WHERE id = $1 AND user_id = $2", [
-    req.params.id,
-    userId,
-  ]);
-  const campaign = campaignResult.rows[0];
+  const campaign = (await pool.query("SELECT * FROM campaigns WHERE id = $1 AND user_id = $2", [req.params.id, userId])).rows[0];
   if (!campaign) return res.status(404).json({ error: "Campaign not found." });
 
   const sendsResult = await pool.query(
@@ -306,6 +386,72 @@ campaignRouter.get("/:id", async (req, res) => {
   });
 });
 
+const statusActionSchema = z.object({ action: z.enum(["pause", "resume", "cancel"]) });
+
+// Allowed transitions; anything else is a 409 rather than a silent overwrite.
+const TRANSITIONS: Record<string, { from: string[]; to: string }> = {
+  pause: { from: ["ACTIVE"], to: "PAUSED" },
+  resume: { from: ["PAUSED"], to: "ACTIVE" },
+  cancel: { from: ["ACTIVE", "PAUSED"], to: "CANCELLED" },
+};
+
+campaignRouter.post("/:id/status", async (req, res) => {
+  const parsed = statusActionSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "action must be pause, resume or cancel." });
+  const transition = TRANSITIONS[parsed.data.action]!;
+  const userId = req.auth!.userId;
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const updated = await client.query(
+      `UPDATE campaigns SET status = $1, updated_at = now() WHERE id = $2 AND user_id = $3 AND status = ANY($4) RETURNING *`,
+      [transition.to, req.params.id, userId, transition.from]
+    );
+    if (updated.rows.length === 0) {
+      await client.query("ROLLBACK");
+      const exists = (await pool.query("SELECT status FROM campaigns WHERE id = $1 AND user_id = $2", [req.params.id, userId])).rows[0];
+      if (!exists) return res.status(404).json({ error: "Campaign not found." });
+      return res.status(409).json({ error: `Can't ${parsed.data.action} a ${exists.status.toLowerCase()} campaign.` });
+    }
+    let cancelledSends = 0;
+    if (transition.to === "CANCELLED") {
+      // Unsent drafts are released (they stop counting against the plan allowance); sent history is untouched.
+      cancelledSends = (
+        await client.query("UPDATE email_sends SET status = 'CANCELLED' WHERE campaign_id = $1 AND status IN ('QUEUED','FAILED')", [
+          req.params.id,
+        ])
+      ).rowCount ?? 0;
+    }
+    await client.query("COMMIT");
+    res.json({ campaign: toCampaignResponse(updated.rows[0]), cancelledSends });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+});
+
+/** Re-queues FAILED drafts that never left the outbox. They go through the same caps on dispatch. */
+campaignRouter.post("/:id/retry-failed", async (req, res) => {
+  const userId = req.auth!.userId;
+  const campaign = (await pool.query("SELECT * FROM campaigns WHERE id = $1 AND user_id = $2", [req.params.id, userId])).rows[0];
+  if (!campaign) return res.status(404).json({ error: "Campaign not found." });
+  if (campaign.status === "CANCELLED") return res.status(409).json({ error: "This campaign was cancelled." });
+
+  const requeued = await pool.query(
+    `UPDATE email_sends SET status = 'QUEUED', failure_reason = NULL
+     WHERE campaign_id = $1 AND user_id = $2 AND status = 'FAILED' AND sent_at IS NULL RETURNING id`,
+    [campaign.id, userId]
+  );
+  if (campaign.status === "COMPLETED" && requeued.rows.length > 0) {
+    await pool.query("UPDATE campaigns SET status = 'ACTIVE', updated_at = now() WHERE id = $1", [campaign.id]);
+  }
+  await markCampaignCompletedIfDone(campaign.id);
+  res.json({ requeued: requeued.rows.length });
+});
+
 function toInvestorProfile(row: any): InvestorProfile {
   return {
     id: row.id,
@@ -317,7 +463,7 @@ function toInvestorProfile(row: any): InvestorProfile {
     checkSizeMinUsd: row.check_size_min_usd,
     checkSizeMaxUsd: row.check_size_max_usd,
     thesisKeywords: row.thesis_keywords,
-    lastKnownActiveAt: row.last_known_active_at,
+    lastKnownActiveAt: row.last_known_active_at ? new Date(row.last_known_active_at) : null,
     isVerified: row.is_verified,
   };
 }
@@ -341,6 +487,7 @@ function toSendResponse(row: any) {
     bodyText: row.body_text,
     matchScore: row.match_score,
     status: row.status,
+    failureReason: row.failure_reason ?? null,
     scheduledFor: row.scheduled_for,
     sentAt: row.sent_at,
   };

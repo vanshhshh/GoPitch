@@ -26,7 +26,7 @@ export default function AdminOverviewPage() {
 
   if (!metrics) {
     return (
-      <div className="max-w-5xl mx-auto px-8 py-10">
+      <div className="max-w-5xl mx-auto px-4 sm:px-8 py-10">
         <p className="text-ink-soft text-sm">Loading…</p>
       </div>
     );
@@ -42,7 +42,7 @@ export default function AdminOverviewPage() {
   ];
 
   return (
-    <div className="max-w-5xl mx-auto px-8 py-10">
+    <div className="max-w-5xl mx-auto px-4 sm:px-8 py-10">
       <h1 className="font-display text-2xl mb-1">Platform overview</h1>
       <p className="text-ink-soft text-sm mb-8">Real-time metrics across the whole platform.</p>
 

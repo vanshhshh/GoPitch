@@ -23,6 +23,7 @@ export function verifyRazorpaySignature(rawBody: string, signatureHeader: string
 
   // Constant-time comparison — a naive === comparison leaks timing information that
   // could theoretically help an attacker guess a valid signature byte-by-byte.
+  if (!/^[0-9a-f]+$/i.test(signatureHeader)) return false;
   const expectedBuffer = Buffer.from(expectedSignature, "hex");
   const receivedBuffer = Buffer.from(signatureHeader, "hex");
 
@@ -30,8 +31,20 @@ export function verifyRazorpaySignature(rawBody: string, signatureHeader: string
   return crypto.timingSafeEqual(expectedBuffer, receivedBuffer);
 }
 
+/**
+ * Verifies the signature Razorpay Checkout hands the browser on success:
+ * HMAC_SHA256(order_id + "|" + payment_id, key_secret). It proves the payment id really
+ * belongs to our order — but not that it's captured, so callers still confirm the status.
+ * Reference: https://razorpay.com/docs/payments/server-integration/nodejs/payment-gateway/build-integration/#verify-payment-signature
+ */
+export function verifyCheckoutSignature(orderId: string, paymentId: string, signature: string | undefined, keySecret: string): boolean {
+  if (!signature || !keySecret || !orderId || !paymentId) return false;
+  return verifyRazorpaySignature(`${orderId}|${paymentId}`, signature, keySecret);
+}
+
 export interface RazorpayWebhookPayload {
   event: string;
+  created_at?: number;
   payload: {
     payment?: {
       entity?: {
@@ -39,7 +52,24 @@ export interface RazorpayWebhookPayload {
         order_id: string;
         status: string;
         amount: number;
+        error_description?: string | null;
         notes?: Record<string, string>;
+      };
+    };
+    order?: {
+      entity?: {
+        id: string;
+        amount: number;
+        amount_paid?: number;
+        status: string;
+      };
+    };
+    refund?: {
+      entity?: {
+        id: string;
+        payment_id: string;
+        amount: number;
+        status: string;
       };
     };
     subscription?: {

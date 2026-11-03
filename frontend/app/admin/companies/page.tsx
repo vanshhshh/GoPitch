@@ -23,7 +23,7 @@ export default function AdminCompaniesPage() {
   }, []);
 
   return (
-    <div className="max-w-5xl mx-auto px-8 py-10">
+    <div className="max-w-5xl mx-auto px-4 sm:px-8 py-10">
       <h1 className="font-display text-2xl mb-1">Companies</h1>
       <p className="text-ink-soft text-sm mb-8">Every company profile created on the platform.</p>
 

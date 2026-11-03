@@ -1,114 +1,73 @@
-# GoPitch — full-stack SaaS: deck, investor matching, outreach
+# GoPitch
 
-A note on the `.env` files in this delivery: they're sanitized examples, not your real
-credentials. You pasted live secrets (Neon DB, Razorpay test keys, Google OAuth client
-secret, a Gmail app password) directly into chat — I used them to build and test
-everything below, but did not bake them into this downloadable zip, since shipping live
-secrets in a file you might commit or share is bad practice regardless of how you got
-them. Fill in `backend/.env` yourself with the same values (you have them), and rotate
-the Gmail app password / Google OAuth secret at some point since they were typed into a
-chat conversation.
+Fundraising SaaS for founders: company profile → pitch deck (upload, or AI-generated on paid
+plans) → scored investor matching → personalized outreach sent from the founder's own Gmail.
 
-## What's real vs. what needs your action
+- `frontend/` — Next.js 14 (App Router), Tailwind. Talks to the API with a bearer token.
+- `backend/` — Express 5 + node-postgres (hand-written SQL). `prisma/schema.prisma` is
+  documentation only; `sql/schema.sql` + `sql/migrations/` are what runs.
 
-**Fully built, tested, and verified live in this session** (against local Postgres — see
-Neon note below):
-
-- Full auth (signup with name, login, JWT), 68/68 backend tests passing, clean strict
-  TypeScript on both frontend and backend
-- **2,725 real investor contacts imported** from your CSV — zero fabricated data. The
-  source had no stage/sector/geography/check-size info, so every record is flagged
-  `needsEnrichment: true` and excluded from matching until an admin adds real data
-  (via the Investors page — edit, verify, or bulk-import a richer CSV)
-- Admin investor CRUD (create/edit/delete/verify/bulk-import) — all tested live
-- Deck generation correctly **disabled** with no `ANTHROPIC_API_KEY`, with a working
-  PPTX/PDF upload fallback that's used everywhere a deck is referenced
-- **Investor matching works on both paths** — I found and fixed a real gap where
-  founders who upload (rather than generate) a deck never got matching keywords
-  populated; it now falls back to their own sector tags. Regression-tested.
-- Google OAuth: full redirect → callback → AES-256-GCM encrypted refresh token storage,
-  verified against your real client ID (generates a correct real Google consent URL)
-- Gmail send path (production) + explicit SMTP dev fallback, clearly separated so SMTP
-  can never silently substitute for a founder's real account
-- Razorpay: real order creation code (correct against your test keys — see network note
-  below), webhook signature verification tested with a real HMAC-signed payload
-  (correctly activated a subscription; correctly rejected a tampered one)
-- Bounce/complaint classification, rate limiting (warm-up ramp + circuit breakers),
-  Helmet security headers, auth rate limiting — all tested
-- **Landing page** (hero, features, testimonials, FAQ, pricing, Framer Motion, sticky
-  nav) + all 7 marketing pages (features, pricing, about, contact — wired to a real
-  backend endpoint, privacy, terms, blog)
-- **7-step onboarding wizard**: company → stage → sector → country → raise amount →
-  deck (generate or upload) → connect Gmail → finish
-- **Founder dashboard**: Overview, Campaigns (with Gmail-gated sending), Email
-  Templates (full CRUD), Outreach, Analytics (real aggregated data), Billing (real
-  Razorpay Checkout integration + invoice history), Notifications, Settings
-- **Admin dashboard**: Overview/Platform Metrics, Users, Companies, Investors (CRUD +
-  verification + CSV bulk import), Campaigns, Payments, Analytics, Support, Settings
-- Full production builds: 31 frontend routes, zero errors, zero warnings
-
-**One deliberate deviation from the literal spec**: "Investor Verification" isn't a
-separate nav page — it's a filter tab on the Investors page, since it's the same
-underlying data. Splitting it into two pages would mean the same investor record
-editable in two different places.
-
-## Two things I could not test from this sandbox — code is correct, network was blocked
-
-This sandbox's network allowlist doesn't include `neon.tech` or `api.razorpay.com`
-(confirmed via direct `x-deny-reason: host_not_allowed` responses, not a guess). Both
-integrations are built and their logic is verified as correct — Razorpay's request was
-built with your real keys, Neon's schema is proven identical on local Postgres — but
-neither was provably reachable from here. On your actual machine or VPS, both will just
-work.
-
-## Run it
+## Run locally
 
 ```bash
-# Backend
 cd backend
 npm install
-cp .env.example .env   # fill in your real values
+cp .env.example .env          # fill in values
+psql "$DATABASE_URL" -f sql/schema.sql   # fresh database only
+npm run migrate               # applies sql/migrations in order (idempotent)
+npm run dev                   # :4000
 
-# Point DATABASE_URL at your Neon DB, then apply the schema once:
-psql "$DATABASE_URL" -f sql/schema.sql
-
-npx vitest run          # 68 tests should pass
-npx tsc --noEmit        # should be clean
-npx tsx src/app.ts      # starts on :4000
-
-# Create your admin account (already done once with your real credentials during build —
-# re-run against Neon since that only happened against local Postgres in this sandbox):
-npx tsx scripts/makeAdmin.ts vansh.sharma.cse@gmail.com "Vansh@3010"
-
-# Import your investor CSV:
-npx tsx scripts/importInvestors.ts path/to/vc_contacts.csv
+cd ../frontend
+npm install
+echo "NEXT_PUBLIC_API_BASE=http://localhost:4000" > .env.local
+npm run dev                   # :3000
 ```
+
+Create an admin: `npx tsx scripts/makeAdmin.ts <email> <password>` (choose a fresh password;
+never commit it).
+
+## Tests
 
 ```bash
-# Frontend
-cd frontend
-npm install
-cp .env.local.example .env.local   # point at your backend URL
-npx next build
-npx next start -p 3000
+cd backend
+npm test                      # unit + integration (integration runs on in-process Postgres/PGlite)
+npm run typecheck
 ```
 
-## Why backend runs on `pg` instead of Prisma
+Integration tests apply `schema.sql` and every migration to a throwaway in-memory Postgres,
+then drive the real HTTP API. AI, Gmail delivery and Razorpay's API are mocked; Razorpay
+webhooks are signed with a test secret. No real email or payment ever happens.
 
-`prisma/schema.prisma` is the documented data model, but the actual queries run through
-hand-written SQL via `pg` (`backend/sql/schema.sql`) — Prisma's engine binaries download
-from `binaries.prisma.sh`, which was also blocked in this sandbox. Same schema, zero
-functional difference, works identically on your VPS. Switch to Prisma's client later if
-you want; the SQL file is a 1:1 translation.
+Local end-to-end (browser) run: `npm run e2e:server` starts the real API on :4100 with seeded
+investors and stubbed AI/Gmail, then `NEXT_PUBLIC_API_BASE=http://localhost:4100 npx next dev -p 3100`
+in `frontend/`.
 
-## What's genuinely left
+## Business rules (enforced in the backend)
 
-- Run everything above against your real Neon DB (can't be done from this sandbox —
-  needs to happen from your machine or once deployed)
-- Google Cloud OAuth consent screen is in "Testing" mode per your setup — fine for your
-  own test user, needs Google's verification review before other users can connect
-  Gmail in production
-- Razorpay is on test keys — swap for live keys when ready to take real payments
-- Deploy to your Hostinger VPS: same pattern as your MutualFundsGalathai deploy —
-  Nginx + PM2 + Certbot for both frontend and backend, Postgres already there (or point
-  at Neon directly, which is what your `.env` currently does)
+| Plan | Price | Outreach emails | Active campaigns |
+|---|---|---|---|
+| Free | ₹0 | 30 (lifetime) | 1 |
+| Starter | ₹4,499 one-time | 100 per purchase | unlimited |
+| Growth | ₹11,999 / month | 500 per 30-day period | unlimited |
+| Enterprise | Custom quote (typically from ₹30,000–₹35,000) | configurable | configurable |
+
+Sending, every plan: 50 emails/day for the first 3 days after Gmail is connected, then
+150/day. The daily count resets at 00:00 UTC (05:30 IST). Dispatch is serialized per user
+with a Postgres advisory lock so concurrent requests can't exceed either limit.
+
+A plan is only activated after the server confirms a captured payment (Razorpay webhook,
+or the post-checkout verify call, which fetches the payment from Razorpay).
+
+## Production checklist
+
+See the audit report for the full list. Minimum:
+
+1. `npm run migrate` against production (additive, idempotent migration `20250101000005_audit_hardening.sql`).
+2. Razorpay Dashboard → Webhooks: URL `https://<api>/api/billing/webhook`, events
+   `payment.captured`, `order.paid`, `payment.failed`, `refund.processed`; secret = `RAZORPAY_WEBHOOK_SECRET`.
+3. Google Cloud OAuth client: authorized redirect URIs `<api>/auth/google/callback` and
+   `<api>/auth/google/signin/callback`; consent screen scopes `gmail.send`, `gmail.metadata`,
+   `userinfo.email`, `openid`, `email`, `profile` (restricted scopes require Google verification).
+4. `FRONTEND_URL` set to the exact production origin(s); `NODE_ENV=production`.
+5. Rotate any credential that was ever pasted into chat or committed (including the admin
+   password that appeared in an earlier version of this README).

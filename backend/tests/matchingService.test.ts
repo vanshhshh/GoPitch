@@ -168,13 +168,27 @@ describe("rankInvestors", () => {
     const company = baseCompany();
     const investors: InvestorProfile[] = [
       baseInvestor({ id: "a", sectorFocus: ["fintech", "payments"] }), // strong fit
-      baseInvestor({ id: "b", sectorFocus: ["biotech"], thesisKeywords: ["gene therapy"] }), // weak fit
+      baseInvestor({ id: "b", sectorFocus: ["fintech", "payments", "lending", "insurance"] }), // partial overlap
+      baseInvestor({ id: "d", sectorFocus: ["fintech", "payments", "lending", "insurance", "crypto", "wealth"] }), // weaker overlap
       baseInvestor({ id: "c", isVerified: false }), // excluded
     ];
     const results = rankInvestors(company, investors, new Map(), 2, now);
     expect(results.length).toBe(2);
     expect(results[0]?.investorId).toBe("a");
+    expect(results[1]?.investorId).toBe("b");
     expect(results.every((r) => !r.excluded)).toBe(true);
+  });
+
+  it("never matches an investor with no sector overlap, even if stage and cheque size fit", () => {
+    const company = baseCompany();
+    const results = rankInvestors(company, [baseInvestor({ id: "bio", sectorFocus: ["biotech"], thesisKeywords: ["gene therapy"] })], new Map(), 10, now);
+    expect(results).toHaveLength(0);
+  });
+
+  it("never matches an investor two or more stages away, even with a perfect sector fit", () => {
+    const company = baseCompany();
+    const results = rankInvestors(company, [baseInvestor({ id: "late", stageFocus: ["SERIES_B_PLUS"] })], new Map(), 10, now);
+    expect(results).toHaveLength(0);
   });
 
   it("excludes investors with zero score from the ranked output", () => {

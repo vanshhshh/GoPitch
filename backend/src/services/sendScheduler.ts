@@ -36,12 +36,37 @@ export interface RateLimitDecision {
 }
 
 // Warm-up ramp: 3 days at 50/day, then 150/day after warmup.
+export const WARMUP_DAYS = 3;
+export const WARMUP_DAILY_LIMIT = 50;
+export const POST_WARMUP_DAILY_LIMIT = 150;
 const WARMUP_SCHEDULE: { minDay: number; cap: number }[] = [
-  { minDay: 0, cap: 50 },
-  { minDay: 3, cap: 150 },
+  { minDay: 0, cap: WARMUP_DAILY_LIMIT },
+  { minDay: WARMUP_DAYS, cap: POST_WARMUP_DAILY_LIMIT },
 ];
 
-const HARD_CEILING = 150; // never exceed regardless of age/reputation — safety margin under platform limits
+/** Whole days since Gmail was connected; a reconnect restarts the ramp (the safe direction). */
+export function accountAgeDaysSince(gmailConnectedAt: Date | string | null | undefined, now = new Date()): number {
+  if (!gmailConnectedAt) return 0;
+  return Math.max(0, Math.floor((now.getTime() - new Date(gmailConnectedAt).getTime()) / 86_400_000));
+}
+
+export function warmupStatus(accountAgeDays: number) {
+  const complete = accountAgeDays >= WARMUP_DAYS;
+  return {
+    warmupDays: WARMUP_DAYS,
+    warmupDay: complete ? null : accountAgeDays + 1,
+    warmupComplete: complete,
+    warmupDailyLimit: WARMUP_DAILY_LIMIT,
+    postWarmupDailyLimit: POST_WARMUP_DAILY_LIMIT,
+  };
+}
+
+/** The daily counter resets at 00:00 UTC (05:30 IST). */
+export function nextDailyResetAt(now = new Date()): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+}
+
+const HARD_CEILING = POST_WARMUP_DAILY_LIMIT; // never exceed regardless of age/reputation — safety margin under platform limits
 
 // Reputation circuit breakers — these override the warm-up cap entirely
 const BOUNCE_PAUSE_THRESHOLD = 3; // 3+ bounces in 7 days -> pause sending, force list re-verification

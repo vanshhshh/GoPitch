@@ -35,7 +35,7 @@ export default function AdminSupportPage() {
   const filtered = messages?.filter((m) => filter === "ALL" || m.status === "OPEN") ?? [];
 
   return (
-    <div className="max-w-3xl mx-auto px-8 py-10">
+    <div className="max-w-3xl mx-auto px-4 sm:px-8 py-10">
       <h1 className="font-display text-2xl mb-1">Support</h1>
       <p className="text-ink-soft text-sm mb-6">Messages submitted through the contact form.</p>
 

@@ -73,8 +73,8 @@ describe("resolveEntitlementTier", () => {
 describe("authorizeCampaignTier", () => {
   const now = new Date("2026-08-07T00:00:00Z");
 
-  it("allows a free founder to create only the starter campaign shape", () => {
-    const result = authorizeCampaignTier(null, "STARTER", now);
+  it("gives a free founder a FREE campaign with free limits", () => {
+    const result = authorizeCampaignTier(null, "FREE", now);
     expect(result.allowed).toBe(true);
     expect(result.entitlementTier).toBe("FREE");
     expect(result.investorLimit).toBe(30);
@@ -90,7 +90,7 @@ describe("authorizeCampaignTier", () => {
   it("blocks starter users from requesting growth limits", () => {
     const result = authorizeCampaignTier({ tier: "STARTER", status: "ACTIVE" }, "GROWTH", now);
     expect(result.allowed).toBe(false);
-    expect(result.reason).toMatch(/current plan/i);
+    expect(result.reason).toMatch(/current starter plan/i);
   });
 
   it("uses paid plan limits for authorized campaigns", () => {

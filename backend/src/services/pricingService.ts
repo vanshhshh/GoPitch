@@ -17,6 +17,8 @@ export interface PricingTier {
   name: string;
   priceInr: number | null;
   billing: "one_time" | "monthly";
+  /** Shown instead of a price for custom-quote tiers. */
+  priceNote?: string;
   includes: string[];
 }
 
@@ -36,13 +38,13 @@ export const PRICING_TIERS: Record<PlanTierId, PricingTier> = {
   STARTER: {
     id: "STARTER",
     name: "Starter",
-    priceInr: 5499,
+    priceInr: 4499,
     billing: "one_time",
     includes: [
       "AI-guided deck creation (interview + screenshots + founder history), or upload your own deck",
       "Curated, scored list of up to 100 best-fit investors from the verified database",
       "Up to 100 fully personalized outreach emails, ready to review and send",
-      "Gmail send at safe warm-up rate (see sendScheduler)",
+      "Sends from your own Gmail at a safe warm-up rate",
     ],
   },
   GROWTH: {
@@ -54,7 +56,7 @@ export const PRICING_TIERS: Record<PlanTierId, PricingTier> = {
       "Everything in Starter",
       "Ongoing campaign management: follow-up sequencing, reply tracking, re-targeting",
       "Deck revisions as traction updates (unlimited regenerations)",
-      "Full daily send cap unlocked as account warms up (see sendScheduler ramp)",
+      "Full daily send cap (150/day) once your Gmail has warmed up",
       "Investor list expands automatically as new verified contacts are added",
     ],
   },
@@ -63,6 +65,7 @@ export const PRICING_TIERS: Record<PlanTierId, PricingTier> = {
     name: "Enterprise",
     priceInr: null,
     billing: "monthly",
+    priceNote: "Custom quote · typically from ₹30,000–₹35,000",
     includes: [
       "Everything in Growth",
       "Dedicated investor list curation and manual enrichment support",
@@ -74,43 +77,22 @@ export const PRICING_TIERS: Record<PlanTierId, PricingTier> = {
 };
 
 export interface PlanLimits {
+  /** Total outreach emails per quota window (lifetime for FREE, per purchase/period for paid). */
   investorEmails: number;
   activeCampaigns: number | null;
-  dailySendLimit: number;
-  warmupDailyLimit: number;
-  postWarmupDailyLimit: number;
 }
 
+// Daily send caps are NOT per plan: every account follows the same warm-up ramp in
+// sendScheduler.ts (50/day for the first 3 days after Gmail is connected, then 150/day).
 export const PLAN_LIMITS: Record<EntitlementTierId, PlanLimits> = {
-  FREE: {
-    investorEmails: 30,
-    activeCampaigns: 1,
-    dailySendLimit: 50,
-    warmupDailyLimit: 50,
-    postWarmupDailyLimit: 150,
-  },
-  STARTER: {
-    investorEmails: 100,
-    activeCampaigns: null,
-    dailySendLimit: 50,
-    warmupDailyLimit: 50,
-    postWarmupDailyLimit: 150,
-  },
-  GROWTH: {
-    investorEmails: 500,
-    activeCampaigns: null,
-    dailySendLimit: 150,
-    warmupDailyLimit: 150,
-    postWarmupDailyLimit: 150,
-  },
+  FREE: { investorEmails: 30, activeCampaigns: 1 },
+  STARTER: { investorEmails: 100, activeCampaigns: null },
+  GROWTH: { investorEmails: 500, activeCampaigns: null },
   ENTERPRISE: {
-    investorEmails: Number(process.env.ENTERPRISE_INVESTOR_EMAIL_LIMIT || Number.MAX_SAFE_INTEGER),
+    investorEmails: Number(process.env.ENTERPRISE_INVESTOR_EMAIL_LIMIT || 2000),
     activeCampaigns: process.env.ENTERPRISE_ACTIVE_CAMPAIGN_LIMIT
       ? Number(process.env.ENTERPRISE_ACTIVE_CAMPAIGN_LIMIT)
       : null,
-    dailySendLimit: Number(process.env.ENTERPRISE_DAILY_SEND_LIMIT || 500),
-    warmupDailyLimit: Number(process.env.ENTERPRISE_WARMUP_DAILY_LIMIT || 500),
-    postWarmupDailyLimit: Number(process.env.ENTERPRISE_POST_WARMUP_DAILY_LIMIT || 1000),
   },
 };
 
@@ -124,6 +106,7 @@ const PLAN_RANK: Record<EntitlementTierId, number> = {
 export interface SubscriptionRecord {
   tier?: string | null;
   status?: string | null;
+  current_period_start?: Date | string | null;
   current_period_end?: Date | string | null;
   currentPeriodEnd?: Date | string | null;
 }
@@ -146,44 +129,93 @@ export function resolveEntitlementTier(subscription?: SubscriptionRecord | null,
   return subscription.tier;
 }
 
+/**
+ * The campaign tier is always the founder's actual entitlement, derived server-side from
+ * their subscription. A client may optionally state the tier it expects (e.g. the plan
+ * shown on screen); if that is higher than what they are entitled to, the request is
+ * refused instead of silently downgraded or — as previously happened for FREE accounts —
+ * silently relabelled as STARTER.
+ */
 export function authorizeCampaignTier(
   subscription: SubscriptionRecord | null | undefined,
-  requestedTier: PlanTierId,
+  requestedTier?: EntitlementTierId | null,
   now = new Date()
 ): CampaignTierAuthorization {
   const entitlementTier = resolveEntitlementTier(subscription, now);
   const limits = PLAN_LIMITS[entitlementTier];
-
-  if (entitlementTier === "FREE" && requestedTier !== "STARTER") {
-    return {
-      allowed: false,
-      entitlementTier,
-      investorLimit: limits.investorEmails,
-      activeCampaignLimit: limits.activeCampaigns,
-      reason: "Upgrade required for this campaign tier.",
-    };
-  }
-
-  if (entitlementTier !== "FREE" && PLAN_RANK[requestedTier] > PLAN_RANK[entitlementTier]) {
-    return {
-      allowed: false,
-      entitlementTier,
-      investorLimit: limits.investorEmails,
-      activeCampaignLimit: limits.activeCampaigns,
-      reason: "Your current plan does not include this campaign tier.",
-    };
-  }
-
-  return {
-    allowed: true,
+  const base = {
     entitlementTier,
     investorLimit: limits.investorEmails,
     activeCampaignLimit: limits.activeCampaigns,
   };
+
+  if (requestedTier && PLAN_RANK[requestedTier] > PLAN_RANK[entitlementTier]) {
+    return {
+      ...base,
+      allowed: false,
+      reason:
+        entitlementTier === "FREE"
+          ? `Upgrade required: your account is on the Free plan, not ${PRICING_TIERS[requestedTier].name}.`
+          : `Your current ${PRICING_TIERS[entitlementTier].name} plan does not include ${PRICING_TIERS[requestedTier].name} campaigns.`,
+    };
+  }
+
+  return { ...base, allowed: true };
 }
 
-function isPlanTier(tier: unknown): tier is PlanTierId {
+export function isPlanTier(tier: unknown): tier is Exclude<PlanTierId, "FREE"> {
   return tier === "STARTER" || tier === "GROWTH" || tier === "ENTERPRISE";
+}
+
+export function planRank(tier: EntitlementTierId): number {
+  return PLAN_RANK[tier];
+}
+
+/**
+ * Start of the window in which outreach emails count against the plan's investorEmails
+ * allowance. FREE is a lifetime allowance (null = count everything), so signing out,
+ * refreshing, or creating more campaigns can never reset it. A paid plan's allowance
+ * starts when the paid period started (a new Starter purchase or Growth renewal grants a
+ * fresh allowance).
+ */
+export function quotaWindowStart(
+  subscription: SubscriptionRecord | null | undefined,
+  now = new Date()
+): Date | null {
+  const tier = resolveEntitlementTier(subscription, now);
+  if (tier === "FREE" || !subscription?.current_period_start) return null;
+  return new Date(subscription.current_period_start);
+}
+
+export interface UsageCounts {
+  /** Emails that actually left the founder's outbox (sent_at set) — includes later REPLIED/BOUNCED. */
+  sent: number;
+  /** Drafts still waiting to be sent. */
+  queued: number;
+}
+
+export interface QuotaSummary {
+  limit: number;
+  sent: number;
+  queued: number;
+  /** Allowance not yet consumed by sent emails. */
+  remainingToSend: number;
+  /** Allowance not yet claimed by sent OR queued emails — what a new campaign may draft. */
+  remainingToAllocate: number;
+  exhausted: boolean;
+}
+
+export function summarizeQuota(limit: number, usage: UsageCounts): QuotaSummary {
+  const remainingToSend = Math.max(0, limit - usage.sent);
+  const remainingToAllocate = Math.max(0, limit - usage.sent - usage.queued);
+  return {
+    limit,
+    sent: usage.sent,
+    queued: usage.queued,
+    remainingToSend,
+    remainingToAllocate,
+    exhausted: remainingToSend === 0,
+  };
 }
 
 // ---------- Unit economics ----------

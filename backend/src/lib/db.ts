@@ -34,3 +34,32 @@ export async function withTransaction<T>(fn: (client: import("pg").PoolClient) =
     client.release();
   }
 }
+
+export type Queryable = Pick<import("pg").PoolClient, "query">;
+
+/**
+ * Runs fn while holding a Postgres session-level advisory lock scoped to (scope, userId).
+ * Returns { acquired: false } immediately if another request — on any API instance — holds
+ * the same lock, so double-clicks and concurrent tabs can't run the same per-user critical
+ * section (dispatching sends, drafting a campaign) twice at once. Every query that must be
+ * serialized should run on the provided client.
+ */
+export async function withUserLock<T>(
+  scope: string,
+  userId: string,
+  fn: (client: import("pg").PoolClient) => Promise<T>
+): Promise<{ acquired: true; result: T } | { acquired: false }> {
+  const client = await pool.connect();
+  const key = `${scope}:${userId}`;
+  try {
+    const lock = await client.query("SELECT pg_try_advisory_lock(hashtext($1)) AS ok", [key]);
+    if (!lock.rows[0]?.ok) return { acquired: false };
+    try {
+      return { acquired: true, result: await fn(client) };
+    } finally {
+      await client.query("SELECT pg_advisory_unlock(hashtext($1))", [key]).catch(() => {});
+    }
+  } finally {
+    client.release();
+  }
+}

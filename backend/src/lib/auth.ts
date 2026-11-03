@@ -1,6 +1,7 @@
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { Request, Response, NextFunction } from "express";
+import { pool } from "./db";
 
 const JWT_SECRET = process.env.JWT_SECRET || "";
 if (!JWT_SECRET) {
@@ -53,10 +54,20 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   }
 }
 
-/** Requires the authenticated user to be an admin. Must run after requireAuth. */
-export function requireAdmin(req: Request, res: Response, next: NextFunction) {
+/**
+ * Requires the authenticated user to be an admin. Must run after requireAuth. The role is
+ * re-read from the database rather than trusted from the 7-day JWT, so demoting or
+ * deleting an admin takes effect immediately instead of when their token expires.
+ */
+export async function requireAdmin(req: Request, res: Response, next: NextFunction) {
   if (req.auth?.role !== "ADMIN") {
     return res.status(403).json({ error: "Admin access required." });
   }
-  next();
+  try {
+    const row = (await pool.query("SELECT role FROM users WHERE id = $1", [req.auth.userId])).rows[0];
+    if (row?.role !== "ADMIN") return res.status(403).json({ error: "Admin access required." });
+    next();
+  } catch (err) {
+    next(err);
+  }
 }

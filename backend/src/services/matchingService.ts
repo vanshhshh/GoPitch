@@ -255,6 +255,16 @@ function round1(n: number): number {
 // though it's technically non-zero.
 const MIN_MEANINGFUL_SCORE = 10;
 
+/**
+ * A match must have real thesis fit: some sector/keyword overlap AND a stage the fund
+ * invests at (or one step from). Check size + recency alone can reach the score floor
+ * (15 + 5 points), which used to surface e.g. a Series B biotech fund as a "match" for a
+ * seed fintech startup simply because the ask fit its cheque range.
+ */
+export function hasThesisFit(result: MatchResult): boolean {
+  return result.breakdown.sectorFit > 0 && result.breakdown.stageFit > 0;
+}
+
 export function rankInvestors(
   company: CompanyProfile,
   investors: InvestorProfile[],
@@ -264,7 +274,7 @@ export function rankInvestors(
 ): MatchResult[] {
   const scored = investors
     .map((inv) => scoreInvestor(company, inv, warmthMap.get(inv.id) ?? null, now))
-    .filter((r) => !r.excluded && r.score >= MIN_MEANINGFUL_SCORE)
+    .filter((r) => !r.excluded && hasThesisFit(r) && r.score >= MIN_MEANINGFUL_SCORE)
     .sort((a, b) => b.score - a.score);
 
   return scored.slice(0, limit);

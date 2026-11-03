@@ -1,28 +1,34 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import toast from "react-hot-toast";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, errorMessage, startGmailConnect, takeGmailReturnTo } from "@/lib/api";
 
 interface Profile {
   id: string;
   email: string;
   name: string | null;
   gmailConnected: boolean;
+  replyTrackingEnabled: boolean;
   connectedGmailAddress: string | null;
+  gmailConnectedAt: string | null;
   sendReputationScore: number;
   complaintReportedAt: string | null;
-  gmailGrantedScopes: string | null;
 }
 
-interface Company {
-  id: string;
-}
+const GMAIL_ERRORS: Record<string, string> = {
+  access_denied: "Gmail connection was cancelled on Google's screen.",
+  invalid_state: "That Gmail connection attempt expired. Please connect again.",
+  missing_profile: "Google didn't share your Gmail address. Please try again.",
+  send_permission_missing: "GoPitch needs permission to send email. Connect again and leave the send permission ticked.",
+  exchange_failed: "Google rejected the connection. Please try again.",
+  restart: "Gmail connection has been updated. Please click Connect Gmail again.",
+};
 
 export default function SettingsPage() {
   return (
-    <Suspense fallback={<div className="max-w-lg mx-auto px-8 py-10 text-ink-soft text-sm">Loading…</div>}>
+    <Suspense fallback={<div className="max-w-lg mx-auto px-4 sm:px-8 py-10 text-ink-soft text-sm">Loading…</div>}>
       <SettingsContent />
     </Suspense>
   );
@@ -32,9 +38,13 @@ function SettingsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const handled = useRef(false);
 
   async function refresh() {
     const p = await api.get<Profile>("/api/profile/me");
@@ -43,56 +53,37 @@ function SettingsContent() {
     return p;
   }
 
-  async function refreshUntilGmailConnected() {
-    let latest = await refresh();
-    for (let attempt = 0; attempt < 5 && !latest.gmailConnected; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      latest = await refresh();
-    }
-    return latest;
-  }
-
   useEffect(() => {
-    let cancelled = false;
+    if (handled.current) return;
+    handled.current = true;
+    const nonce = searchParams.get("gmail_confirm");
+    const gmailError = searchParams.get("gmail_error");
 
-    async function load() {
-      const gmailConnected = searchParams.get("gmail_connected");
-      const gmailError = searchParams.get("gmail_error");
-
-      try {
-        const p = gmailConnected ? await refreshUntilGmailConnected() : await refresh();
-        if (cancelled) return;
-
-        if (gmailConnected) {
-          if (p.gmailConnected) {
-            toast.success("Gmail connected.");
-            const pendingCompanyId = localStorage.getItem("gopitch_pending_company_after_gmail");
-            if (pendingCompanyId) {
-              localStorage.removeItem("gopitch_pending_company_after_gmail");
-              try {
-                await api.get<Company>(`/api/companies/${pendingCompanyId}`);
-                router.replace(`/company/${pendingCompanyId}?gmail_connected=true`);
-              } catch {
-                router.replace("/dashboard/settings");
-              }
-            } else {
-              router.replace("/dashboard/settings");
-            }
-          } else {
-            toast.error("Gmail connection did not persist. Try connecting again.");
+    (async () => {
+      if (nonce) {
+        // Drop the nonce from the URL before using it (single-use anyway).
+        router.replace("/dashboard/settings");
+        try {
+          const res = await api.post<{ connectedGmailAddress: string }>("/api/profile/gmail/confirm", { nonce });
+          toast.success(`Gmail connected: ${res.connectedGmailAddress}`);
+          const returnTo = takeGmailReturnTo();
+          if (returnTo) {
+            router.replace(returnTo);
+            return;
           }
+        } catch (err) {
+          toast.error(errorMessage(err, "Couldn't finish connecting Gmail."), { duration: 8000 });
         }
-      } catch {
-        if (!cancelled) toast.error("Couldn't refresh your connected account status.");
+      } else if (gmailError) {
+        toast.error(GMAIL_ERRORS[gmailError] || "Gmail connection failed. Please try again.", { duration: 8000 });
+        router.replace("/dashboard/settings");
       }
-
-      if (gmailError && !cancelled) toast.error(`Gmail connection failed (${gmailError}).`);
-    }
-
-    load();
-    return () => {
-      cancelled = true;
-    };
+      try {
+        await refresh();
+      } catch (err) {
+        setLoadError(errorMessage(err, "Couldn't load your settings."));
+      }
+    })();
   }, [router, searchParams]);
 
   async function saveName(e: React.FormEvent) {
@@ -101,7 +92,7 @@ function SettingsContent() {
     try {
       await api.patch("/api/profile/me", { name });
       toast.success("Profile updated.");
-      refresh();
+      await refresh();
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "Couldn't save.");
     } finally {
@@ -109,18 +100,23 @@ function SettingsContent() {
     }
   }
 
-  function connectGmail() {
-    const token = localStorage.getItem("gopitch_token");
-    const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:4000";
-    window.location.href = `${apiBase}/auth/google/init?token=${token}`;
+  async function connectGmail() {
+    setConnecting(true);
+    try {
+      await startGmailConnect();
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't start Gmail connection."));
+      setConnecting(false);
+    }
   }
 
   async function disconnectGmail() {
     setDisconnecting(true);
     try {
       await api.post("/api/profile/disconnect-gmail");
-      toast.success("Gmail disconnected.");
-      refresh();
+      toast.success("Gmail disconnected. Sending is paused until you reconnect.");
+      setConfirmDisconnect(false);
+      await refresh();
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "Couldn't disconnect.");
     } finally {
@@ -128,16 +124,27 @@ function SettingsContent() {
     }
   }
 
+  if (loadError) {
+    return (
+      <div className="max-w-lg mx-auto px-4 sm:px-8 py-10">
+        <p className="text-sm text-danger">{loadError}</p>
+        <button className="btn-secondary mt-4" onClick={() => refresh().then(() => setLoadError(null)).catch(() => {})}>
+          Retry
+        </button>
+      </div>
+    );
+  }
+
   if (!profile) {
     return (
-      <div className="max-w-lg mx-auto px-8 py-10">
+      <div className="max-w-lg mx-auto px-4 sm:px-8 py-10">
         <p className="text-ink-soft text-sm">Loading…</p>
       </div>
     );
   }
 
   return (
-    <div className="max-w-lg mx-auto px-8 py-10 space-y-8">
+    <div className="max-w-lg mx-auto px-4 sm:px-8 py-10 space-y-8">
       <div>
         <h1 className="font-display text-2xl mb-1">Settings</h1>
         <p className="text-ink-soft text-sm">Profile and connected accounts.</p>
@@ -146,15 +153,15 @@ function SettingsContent() {
       <section className="card p-6">
         <h2 className="font-display text-base mb-4">Profile</h2>
         <form onSubmit={saveName} className="space-y-3">
-          <div>
-            <label className="label block mb-1.5">Name</label>
-            <input className="input-field" value={name} onChange={(e) => setName(e.target.value)} />
-          </div>
-          <div>
-            <label className="label block mb-1.5">Email</label>
+          <label className="block">
+            <span className="label block mb-1.5">Name</span>
+            <input className="input-field" required maxLength={100} value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+          <label className="block">
+            <span className="label block mb-1.5">Email</span>
             <input className="input-field bg-line-soft" value={profile.email} disabled />
-          </div>
-          <button type="submit" className="btn-primary" disabled={saving}>
+          </label>
+          <button type="submit" className="btn-primary" disabled={saving || !name.trim() || name === (profile.name ?? "")}>
             {saving ? "Saving…" : "Save"}
           </button>
         </form>
@@ -165,32 +172,47 @@ function SettingsContent() {
         {profile.gmailConnected ? (
           <div>
             <p className="text-sm mb-1">
-              Connected: <span className="font-mono">{profile.connectedGmailAddress}</span>
+              Connected: <span className="font-mono break-all">{profile.connectedGmailAddress}</span>
+            </p>
+            <p className="text-xs text-ink-soft mb-1">
+              Send reputation: {(profile.sendReputationScore * 100).toFixed(0)}%
+              {profile.complaintReportedAt && <span className="text-danger"> · Sending paused (spam complaint) — contact support.</span>}
             </p>
             <p className="text-xs text-ink-soft mb-4">
-              Send reputation: {(profile.sendReputationScore * 100).toFixed(0)}%
-              {profile.complaintReportedAt && (
-                <span className="text-danger"> · Sending paused (spam complaint) — contact support.</span>
-              )}
+              Reply tracking: {profile.replyTrackingEnabled ? "on (GoPitch reads only message headers of threads it sent)" : "off — reconnect to enable"}
             </p>
-            <div className="flex gap-2">
-              <button className="btn-secondary" onClick={disconnectGmail} disabled={disconnecting}>
-                {disconnecting ? "Disconnecting…" : "Disconnect Gmail"}
-              </button>
-              {!profile.gmailGrantedScopes?.includes("gmail.modify") && (
-                <button className="btn-primary" onClick={connectGmail}>
-                  Update Gmail permissions
+            {confirmDisconnect ? (
+              <div className="border border-danger/20 bg-danger-soft rounded p-3">
+                <p className="text-sm mb-3">Disconnect Gmail? Queued emails stay queued but nothing will send until you reconnect.</p>
+                <div className="flex gap-2">
+                  <button className="btn-primary bg-danger hover:bg-danger" onClick={disconnectGmail} disabled={disconnecting}>
+                    {disconnecting ? "Disconnecting…" : "Yes, disconnect"}
+                  </button>
+                  <button className="btn-secondary" onClick={() => setConfirmDisconnect(false)}>
+                    Keep connected
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                <button className="btn-secondary" onClick={() => setConfirmDisconnect(true)}>
+                  Disconnect Gmail
                 </button>
-              )}
-            </div>
+                {!profile.replyTrackingEnabled && (
+                  <button className="btn-primary" onClick={connectGmail} disabled={connecting}>
+                    {connecting ? "Redirecting…" : "Enable reply tracking"}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           <div>
             <p className="text-sm text-ink-soft mb-4">
-              Not connected. Campaign sending is disabled until you connect your Gmail account.
+              Not connected. Campaign emails send from your own Gmail account, so sending is disabled until you connect it.
             </p>
-            <button className="btn-primary" onClick={connectGmail}>
-              Connect Gmail
+            <button className="btn-primary" onClick={connectGmail} disabled={connecting}>
+              {connecting ? "Redirecting…" : "Connect Gmail"}
             </button>
           </div>
         )}

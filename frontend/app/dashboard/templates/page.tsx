@@ -24,7 +24,7 @@ export default function TemplatesPage() {
   useEffect(refresh, []);
 
   return (
-    <div className="max-w-3xl mx-auto px-8 py-10">
+    <div className="max-w-3xl mx-auto px-4 sm:px-8 py-10">
       <div className="flex items-center justify-between mb-1">
         <h1 className="font-display text-2xl">Email templates</h1>
         {!showForm && (

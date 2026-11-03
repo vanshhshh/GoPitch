@@ -29,19 +29,51 @@ export interface DeliveryResult {
   messageId?: string | undefined;
   threadId?: string | undefined;
   error?: string | undefined;
+  /** The founder's Google grant is gone (revoked / expired refresh token) — reconnect needed. */
+  authRevoked?: boolean;
+  /** Gmail is rate limiting this account — stop the batch and retry later. */
+  rateLimited?: boolean;
 }
 
-function buildRfc2822Message(email: OutboundEmail, fromAddress: string): string {
-  const fromHeader = email.fromName ? `${email.fromName} <${fromAddress}>` : fromAddress;
+/** Strips CR/LF so a subject or name (AI-generated or founder-edited) can never inject headers. */
+export function sanitizeHeaderValue(value: string): string {
+  return value.replace(/[\r\n]+/g, " ").trim();
+}
+
+/** RFC 2047 encoded-word for non-ASCII header text (subjects, display names). */
+export function encodeHeaderWord(value: string): string {
+  const clean = sanitizeHeaderValue(value);
+  if (/^[\x20-\x7e]*$/.test(clean)) return clean;
+  return `=?UTF-8?B?${Buffer.from(clean, "utf-8").toString("base64")}?=`;
+}
+
+export function buildRfc2822Message(email: OutboundEmail, fromAddress: string): string {
+  const safeFromAddress = sanitizeHeaderValue(fromAddress);
+  const fromHeader = email.fromName
+    ? `${encodeHeaderWord(email.fromName.replace(/["<>]/g, ""))} <${safeFromAddress}>`
+    : safeFromAddress;
+  // Base64 body: safe for any UTF-8 content (₹, names with accents) through any relay.
+  const bodyBase64 = Buffer.from(email.body, "utf-8").toString("base64").replace(/(.{76})/g, "$1\r\n");
   const lines = [
     `From: ${fromHeader}`,
-    `To: ${email.to}`,
-    `Subject: ${email.subject}`,
+    `To: ${sanitizeHeaderValue(email.to)}`,
+    `Subject: ${encodeHeaderWord(email.subject)}`,
+    "MIME-Version: 1.0",
     `Content-Type: text/plain; charset="UTF-8"`,
+    "Content-Transfer-Encoding: base64",
     "",
-    email.body,
+    bodyBase64,
   ];
   return lines.join("\r\n");
+}
+
+export function classifyGmailError(err: any): { authRevoked: boolean; rateLimited: boolean } {
+  const message = String(err?.response?.data?.error ?? err?.message ?? "");
+  const status = Number(err?.code ?? err?.response?.status ?? 0);
+  return {
+    authRevoked: /invalid_grant/i.test(message) || status === 401,
+    rateLimited: status === 429 || /rate ?limit|user-rate/i.test(message),
+  };
 }
 
 function toBase64Url(input: string): string {
@@ -54,7 +86,13 @@ function toBase64Url(input: string): string {
 
 /** Production path: sends via the founder's own connected Gmail account. */
 export async function sendViaGmailApi(userId: string, email: OutboundEmail, fromAddress: string): Promise<DeliveryResult> {
-  const gmail = await getGmailClientForUser(userId);
+  let gmail;
+  try {
+    gmail = await getGmailClientForUser(userId);
+  } catch {
+    // The stored token could not be decrypted (e.g. encryption key rotated) — treat as revoked.
+    return { delivered: false, via: "gmail_api", error: "Stored Gmail credentials are unreadable. Reconnect Gmail.", authRevoked: true };
+  }
   if (!gmail) {
     return { delivered: false, via: "none", error: "No Gmail account connected for this user." };
   }
@@ -72,7 +110,18 @@ export async function sendViaGmailApi(userId: string, email: OutboundEmail, from
       threadId: response.data.threadId ?? undefined,
     };
   } catch (err: any) {
-    return { delivered: false, via: "gmail_api", error: err?.message || "Gmail API send failed." };
+    const { authRevoked, rateLimited } = classifyGmailError(err);
+    return {
+      delivered: false,
+      via: "gmail_api",
+      error: authRevoked
+        ? "Gmail access was revoked or expired. Reconnect Gmail in Settings."
+        : rateLimited
+          ? "Gmail is rate limiting this account. Try again later."
+          : err?.message || "Gmail API send failed.",
+      authRevoked,
+      rateLimited,
+    };
   }
 }
 

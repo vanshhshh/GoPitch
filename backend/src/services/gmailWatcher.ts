@@ -1,8 +1,10 @@
 import { pool } from "../lib/db";
-import { getGmailClientForUser, userHasGmailModifyScope } from "../routes/googleAuth";
+import { getGmailClientForUser, userHasReplyTrackingScope } from "../routes/googleAuth";
+import { classifyInboundMessage } from "../lib/bounceClassifier";
 
-const GMAIL_OAUTH_SCOPE = (process.env.GMAIL_OAUTH_SCOPE || "modify").toLowerCase();
-const WATCHER_REQUIRES_MODIFY = GMAIL_OAUTH_SCOPE !== "send";
+// Reply tracking needs read access to thread headers (gmail.metadata, or a broader legacy
+// grant). With GMAIL_OAUTH_SCOPE=send nothing is requested beyond sending, so it's off.
+const WATCHER_ENABLED_FOR_SCOPE = (process.env.GMAIL_OAUTH_SCOPE || "metadata").toLowerCase() !== "send";
 
 const RECENT_RECHECK_LIMIT = 50;
 const BATCH_LIMIT = 200;
@@ -62,6 +64,37 @@ async function getOlderSends(pool: any, userId: string, cursor: string | null): 
   return { rows: result.rows, oldestSentAt };
 }
 
+export type ThreadSignal = "reply" | "bounce" | "none";
+
+/**
+ * Looks at the other messages in a sent email's thread. A delivery-failure notice from
+ * mailer-daemon lands in the same thread addressed to the founder — it used to be counted
+ * as an investor "reply"; it is now reported as a bounce instead.
+ */
+export function classifyThread(messages: any[], userEmail: string, originalSentAt: string): ThreadSignal {
+  let signal: ThreadSignal = "none";
+  for (const msg of messages) {
+    const headers = extractHeaders(msg.payload?.headers || []);
+    const from = headers.get("from") || "";
+    if (from.toLowerCase().includes(userEmail.toLowerCase())) continue;
+    const messageDate = parseHeaderDate(headers.get("date"));
+    if (!messageDate || messageDate <= new Date(originalSentAt)) continue;
+
+    const classification = classifyInboundMessage({
+      fromAddress: from,
+      subject: headers.get("subject") || "",
+      snippet: msg.snippet || "",
+      headers: Object.fromEntries(headers),
+    });
+    if (classification === "hard_bounce" || classification === "soft_bounce") {
+      signal = signal === "reply" ? "reply" : "bounce";
+      continue;
+    }
+    if (hasInboundInvestorReply([msg], userEmail, originalSentAt)) return "reply";
+  }
+  return signal;
+}
+
 function hasInboundInvestorReply(messages: any[], userEmail: string, originalSentAt: string): boolean {
   for (const msg of messages) {
     const headers = extractHeaders(msg.payload?.headers || []);
@@ -86,11 +119,17 @@ function hasInboundInvestorReply(messages: any[], userEmail: string, originalSen
   return false;
 }
 
+async function markAsBounced(pool: any, send: any): Promise<void> {
+  await pool.query(`UPDATE email_sends SET status = 'BOUNCED', bounced_at = now() WHERE id = $1 AND status = 'SENT'`, [send.id]);
+  await pool.query("UPDATE users SET send_reputation_score = GREATEST(0, send_reputation_score - 0.15) WHERE id = $1", [send.user_id]);
+}
+
 async function markAsReplied(pool: any, userId: string, send: any, userRow: any): Promise<void> {
-  await pool.query(
-    `UPDATE email_sends SET status = 'REPLIED', replied_at = now() WHERE id = $1`,
+  const updated = await pool.query(
+    `UPDATE email_sends SET status = 'REPLIED', replied_at = now() WHERE id = $1 AND status = 'SENT' RETURNING id`,
     [send.id]
   );
+  if (updated.rowCount === 0) return;
 
   const investorResult = await pool.query("SELECT name FROM investors WHERE id = $1", [send.investor_id]);
   const investorName = investorResult.rows[0]?.name || "An investor";
@@ -105,7 +144,7 @@ async function markAsReplied(pool: any, userId: string, send: any, userRow: any)
 export async function checkGmailRepliesForUser(userId: string): Promise<GmailWatchResult> {
   const result: GmailWatchResult = { userId, processed: 0, replied: 0, errors: [] };
 
-  if (!WATCHER_REQUIRES_MODIFY) {
+  if (!WATCHER_ENABLED_FOR_SCOPE) {
     result.errors.push("Gmail watcher disabled — GMAIL_OAUTH_SCOPE is set to 'send'.");
     return result;
   }
@@ -113,8 +152,8 @@ export async function checkGmailRepliesForUser(userId: string): Promise<GmailWat
   const userRow = (await pool.query("SELECT * FROM users WHERE id = $1", [userId])).rows[0];
   if (!userRow || !userRow.google_refresh_token) return result;
 
-  if (!userHasGmailModifyScope(userRow.gmail_granted_scopes)) {
-    result.errors.push("Insufficient Gmail scope — user needs to reconnect with gmail.modify.");
+  if (!userHasReplyTrackingScope(userRow.gmail_granted_scopes)) {
+    result.errors.push("Reply tracking not granted — user needs to reconnect Gmail to enable it.");
     return result;
   }
 
@@ -154,8 +193,12 @@ export async function checkGmailRepliesForUser(userId: string): Promise<GmailWat
         const messages = threadResponse.data.messages || [];
         if (messages.length <= 1) continue;
 
-        const hasReply = hasInboundInvestorReply(messages, userRow.connected_gmail_address || userRow.email, send.sent_at);
-        if (!hasReply) continue;
+        const signal = classifyThread(messages, userRow.connected_gmail_address || userRow.email, send.sent_at);
+        if (signal === "bounce") {
+          await markAsBounced(pool, send);
+          continue;
+        }
+        if (signal !== "reply") continue;
 
         const existingReplied = await pool.query(
           "SELECT id FROM email_sends WHERE id = $1 AND status = 'REPLIED'",

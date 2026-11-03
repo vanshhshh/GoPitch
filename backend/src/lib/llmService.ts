@@ -6,7 +6,7 @@ export type AIProviderId = "anthropic" | "claude" | "gemini" | "groq" | "openrou
 const DEFAULT_MODEL_BY_PROVIDER: Record<AIProviderId, string> = {
   anthropic: "claude-sonnet-4-6",
   claude: "claude-sonnet-4-6",
-  gemini: "gemini-1.5-flash",
+  gemini: "gemini-2.5-flash",
   groq: "llama-3.1-8b-instant",
   openrouter: "openai/gpt-4o-mini",
   openai: "gpt-4o-mini",
@@ -60,7 +60,25 @@ export interface PersonalizedEmailResult {
 interface AITextProvider {
   id: AIProviderId;
   isConfigured(): boolean;
-  completeJson(system: string, userPrompt: string): Promise<string>;
+  completeJson(system: string, userPrompt: string, options?: { maxTokens?: number }): Promise<string>;
+}
+
+/** Thrown by providers for HTTP errors so the router can tell rate limits from outages. */
+export class AIProviderHttpError extends Error {
+  constructor(readonly provider: AIProviderId, readonly status: number, readonly retryAfterMs: number | null, body: string) {
+    super(`${provider} returned ${status}: ${body.slice(0, 200)}`);
+  }
+}
+
+export const AI_REQUEST_TIMEOUT_MS = Number(process.env.AI_REQUEST_TIMEOUT_MS || 30_000);
+const RATE_LIMIT_COOLDOWN_MS = 60_000;
+
+function retryAfterMs(header: string | null): number | null {
+  if (!header) return null;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds)) return seconds * 1000;
+  const date = Date.parse(header);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
 }
 
 export class AIProviderUnavailableError extends Error {
@@ -71,6 +89,9 @@ export class AIProviderUnavailableError extends Error {
 
 export class AIRouter {
   private readonly providers: Record<AIProviderId, AITextProvider>;
+  /** Providers that recently returned 429 are tried last until this time, so a 100-email
+   * campaign doesn't hit a rate-limited Groq 100 times before falling back. */
+  private readonly cooldownUntil = new Map<AIProviderId, number>();
 
   constructor(providers: Record<AIProviderId, AITextProvider> = createDefaultProviders()) {
     this.providers = providers;
@@ -84,23 +105,67 @@ export class AIRouter {
     return this.getProviderPriority(feature).some((provider) => this.providers[provider].isConfigured());
   }
 
-  async completeJson(feature: AIFeature, system: string, userPrompt: string): Promise<{ text: string; provider: AIProviderId }> {
+  /**
+   * Tries each configured provider in priority order. A provider's answer is only accepted
+   * if `parse` accepts it — malformed JSON or a missing field falls through to the next
+   * provider instead of failing the whole request. A 429 puts the provider on a cooldown
+   * (honouring Retry-After) and falls back immediately.
+   */
+  async completeJson<T = string>(
+    feature: AIFeature,
+    system: string,
+    userPrompt: string,
+    parse: (text: string) => T = (text) => text as unknown as T
+  ): Promise<{ text: string; value: T; provider: AIProviderId }> {
     const attempted: AIProviderId[] = [];
+    const now = Date.now();
+    const candidates = this.getProviderPriority(feature).filter((id) => this.providers[id].isConfigured());
+    // Cooling-down providers go last rather than being dropped, so a lone provider still gets tried.
+    const ordered = [
+      ...candidates.filter((id) => (this.cooldownUntil.get(id) ?? 0) <= now),
+      ...candidates.filter((id) => (this.cooldownUntil.get(id) ?? 0) > now),
+    ];
 
-    for (const providerId of this.getProviderPriority(feature)) {
-      const provider = this.providers[providerId];
-      if (!provider.isConfigured()) continue;
+    for (const providerId of ordered) {
       attempted.push(providerId);
-
       try {
-        const text = await provider.completeJson(system, userPrompt);
-        if (text.trim()) return { text, provider: providerId };
+        const text = await this.providers[providerId].completeJson(system, userPrompt);
+        if (!text.trim()) throw new Error("empty response");
+        const value = parse(text);
+        this.cooldownUntil.delete(providerId);
+        return { text, value, provider: providerId };
       } catch (err) {
-        console.error(`AI provider ${providerId} failed for ${feature}:`, err);
+        if (err instanceof AIProviderHttpError && err.status === 429) {
+          this.cooldownUntil.set(providerId, Date.now() + Math.min(err.retryAfterMs ?? RATE_LIMIT_COOLDOWN_MS, 10 * 60_000));
+        }
+        // Never log prompts or keys — only which provider failed and why.
+        console.error(`AI provider ${providerId} failed for ${feature}: ${String((err as Error)?.message ?? err).slice(0, 300)}`);
       }
     }
 
     throw new AIProviderUnavailableError(feature, attempted);
+  }
+
+  /**
+   * Live connectivity check: sends a tiny JSON prompt to every configured provider. Having
+   * an API key is not the same as being available (wrong model, revoked key, no quota).
+   */
+  async probe(): Promise<{ provider: AIProviderId; configured: boolean; ok: boolean; latencyMs: number | null; error: string | null }[]> {
+    const ids = (Object.keys(this.providers) as AIProviderId[]).filter((id) => id !== "claude" && id !== "mock");
+    return Promise.all(
+      ids.map(async (id) => {
+        const provider = this.providers[id];
+        if (!provider.isConfigured()) return { provider: id, configured: false, ok: false, latencyMs: null, error: null };
+        const started = Date.now();
+        try {
+          const text = await provider.completeJson('Respond only with this JSON object: {"ok": true}', "ping", { maxTokens: 20 });
+          const ok = JSON.parse(stripFences(text))?.ok === true;
+          return { provider: id, configured: true, ok, latencyMs: Date.now() - started, error: ok ? null : "Unexpected response shape" };
+        } catch (err) {
+          return { provider: id, configured: true, ok: false, latencyMs: Date.now() - started, error: String((err as Error)?.message ?? err).slice(0, 200) };
+        }
+      })
+    );
   }
 }
 
@@ -108,6 +173,10 @@ const aiRouter = new AIRouter();
 
 export function isAIFeatureAvailable(feature: AIFeature): boolean {
   return aiRouter.hasConfiguredProvider(feature);
+}
+
+export function probeAIProviders() {
+  return aiRouter.probe();
 }
 
 export function resolveProviderPriority(feature: AIFeature, env: NodeJS.ProcessEnv = process.env): AIProviderId[] {
@@ -141,10 +210,8 @@ Ask: $${answers.askAmountUsd.toLocaleString()}
 Traction: ${answers.traction || "Not yet provided"}
 Founder background: ${answers.founderBackground || "Not yet provided"}`;
 
-  const completion = await aiRouter.completeJson("deck", system, userPrompt);
-  const parsed = JSON.parse(stripFences(completion.text)) as DeckSections;
-  validateDeckSections(parsed);
-  return { sections: parsed, provider: completion.provider };
+  const completion = await aiRouter.completeJson("deck", system, userPrompt, parseDeckSections);
+  return { sections: completion.value, provider: completion.provider };
 }
 
 export async function generatePersonalizedEmail(input: PersonalizedEmailInput): Promise<PersonalizedEmailResult> {
@@ -156,10 +223,8 @@ Ask: $${input.askAmountUsd.toLocaleString()}
 Investor: ${input.investorName} at ${input.investorFirm}
 Why this investor is a fit: ${input.matchReasons.join("; ")}`;
 
-  const completion = await aiRouter.completeJson("email", system, userPrompt);
-  const parsed = JSON.parse(stripFences(completion.text)) as { subject: string; body: string };
-  if (!parsed.subject?.trim() || !parsed.body?.trim()) throw new Error("AI email response was missing subject or body.");
-  return { subject: parsed.subject.trim(), body: parsed.body.trim(), provider: completion.provider };
+  const completion = await aiRouter.completeJson("email", system, userPrompt, parseEmailResponse);
+  return { ...completion.value, provider: completion.provider };
 }
 
 function createDefaultProviders(): Record<AIProviderId, AITextProvider> {
@@ -203,11 +268,11 @@ function createAnthropicProvider(id: "anthropic" | "claude"): AITextProvider {
   return {
     id,
     isConfigured: () => !!process.env.ANTHROPIC_API_KEY,
-    completeJson: async (system, userPrompt) => {
-      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    completeJson: async (system, userPrompt, options) => {
+      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, timeout: AI_REQUEST_TIMEOUT_MS, maxRetries: 1 });
       const response = await client.messages.create({
         model: process.env.ANTHROPIC_MODEL || DEFAULT_MODEL_BY_PROVIDER[id],
-        max_tokens: 1200,
+        max_tokens: options?.maxTokens ?? 1200,
         system,
         messages: [{ role: "user", content: userPrompt }],
       });
@@ -227,7 +292,7 @@ function createOpenAICompatibleProvider(config: {
   return {
     id: config.id,
     isConfigured: () => !!process.env[config.apiKeyEnv] && !!(process.env[config.baseUrlEnv] || config.defaultBaseUrl),
-    completeJson: async (system, userPrompt) => {
+    completeJson: async (system, userPrompt, options) => {
       const apiKey = process.env[config.apiKeyEnv];
       const baseUrl = (process.env[config.baseUrlEnv] || config.defaultBaseUrl).replace(/\/+$/, "");
       const model = process.env[config.modelEnv] || DEFAULT_MODEL_BY_PROVIDER[config.id];
@@ -239,9 +304,11 @@ function createOpenAICompatibleProvider(config: {
           authorization: `Bearer ${apiKey}`,
           "content-type": "application/json",
         },
+        signal: AbortSignal.timeout(AI_REQUEST_TIMEOUT_MS),
         body: JSON.stringify({
           model,
           temperature: 0.3,
+          max_tokens: options?.maxTokens ?? 1200,
           response_format: { type: "json_object" },
           messages: [
             { role: "system", content: system },
@@ -252,7 +319,7 @@ function createOpenAICompatibleProvider(config: {
 
       if (!response.ok) {
         const body = await response.text().catch(() => "");
-        throw new Error(`${config.id} returned ${response.status}: ${body.slice(0, 300)}`);
+        throw new AIProviderHttpError(config.id, response.status, retryAfterMs(response.headers.get("retry-after")), body);
       }
 
       const data = (await response.json()) as { choices?: { message?: { content?: string } }[] };
@@ -265,15 +332,17 @@ function createGeminiProvider(): AITextProvider {
   return {
     id: "gemini",
     isConfigured: () => !!process.env.GEMINI_API_KEY,
-    completeJson: async (system, userPrompt) => {
+    completeJson: async (system, userPrompt, options) => {
       const model = process.env.GEMINI_MODEL || DEFAULT_MODEL_BY_PROVIDER.gemini;
+      // Key goes in a header, not the URL, so it can't leak into logged request URLs.
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
         {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", "x-goog-api-key": process.env.GEMINI_API_KEY || "" },
+          signal: AbortSignal.timeout(AI_REQUEST_TIMEOUT_MS),
           body: JSON.stringify({
-            generationConfig: { temperature: 0.3, responseMimeType: "application/json" },
+            generationConfig: { temperature: 0.3, responseMimeType: "application/json", maxOutputTokens: options?.maxTokens ?? 1200 },
             contents: [{ role: "user", parts: [{ text: `${system}\n\n${userPrompt}` }] }],
           }),
         }
@@ -281,7 +350,7 @@ function createGeminiProvider(): AITextProvider {
 
       if (!response.ok) {
         const body = await response.text().catch(() => "");
-        throw new Error(`gemini returned ${response.status}: ${body.slice(0, 300)}`);
+        throw new AIProviderHttpError("gemini", response.status, retryAfterMs(response.headers.get("retry-after")), body);
       }
 
       const data = (await response.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
@@ -312,6 +381,20 @@ function createMockProvider(): AITextProvider {
       });
     },
   };
+}
+
+export function parseEmailResponse(text: string): { subject: string; body: string } {
+  const parsed = JSON.parse(stripFences(text)) as { subject?: unknown; body?: unknown };
+  const subject = typeof parsed.subject === "string" ? parsed.subject.replace(/[\r\n]+/g, " ").trim() : "";
+  const body = typeof parsed.body === "string" ? parsed.body.trim() : "";
+  if (!subject || !body) throw new Error("AI email response was missing subject or body.");
+  return { subject: subject.slice(0, 200), body: body.slice(0, 5000) };
+}
+
+export function parseDeckSections(text: string): DeckSections {
+  const parsed = JSON.parse(stripFences(text)) as DeckSections;
+  validateDeckSections(parsed);
+  return parsed;
 }
 
 function stripFences(text: string): string {

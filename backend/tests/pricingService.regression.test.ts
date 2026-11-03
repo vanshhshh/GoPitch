@@ -10,7 +10,7 @@ describe("PRICING_TIERS", () => {
   });
 
   it("has correct prices for paid tiers", () => {
-    expect(PRICING_TIERS.STARTER.priceInr).toBe(5499);
+    expect(PRICING_TIERS.STARTER.priceInr).toBe(4499);
     expect(PRICING_TIERS.GROWTH.priceInr).toBe(11999);
     expect(PRICING_TIERS.ENTERPRISE.priceInr).toBeNull();
   });
@@ -56,9 +56,16 @@ describe("resolveEntitlementTier with one_time STARTER", () => {
 });
 
 describe("authorizeCampaignTier total email enforcement", () => {
-  it("FREE users cannot exceed 30 total emails", () => {
-    const result = authorizeCampaignTier(null, "STARTER", new Date("2026-08-07T00:00:00Z"));
+  it("FREE users get the FREE tier and its 30-email limit (never relabelled as STARTER)", () => {
+    const result = authorizeCampaignTier(null, undefined, new Date("2026-08-07T00:00:00Z"));
     expect(result.allowed).toBe(true);
+    expect(result.entitlementTier).toBe("FREE");
     expect(result.investorLimit).toBe(30);
+  });
+
+  it("FREE users requesting STARTER are refused instead of silently granted", () => {
+    const result = authorizeCampaignTier(null, "STARTER", new Date("2026-08-07T00:00:00Z"));
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toMatch(/upgrade required/i);
   });
 });

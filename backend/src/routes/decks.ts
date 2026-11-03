@@ -5,6 +5,7 @@ import * as fs from "fs";
 import { pool } from "../lib/db";
 import { requireAuth } from "../lib/auth";
 import { AIProviderUnavailableError, generateDeckSections, isAIFeatureAvailable } from "../lib/llmService";
+import { loadEntitlement } from "../services/entitlementService";
 
 export const deckRouter = Router();
 deckRouter.use(requireAuth);
@@ -39,7 +40,29 @@ const upload = multer({
  * the version everywhere a deck is referenced (company page, campaign context), same as
  * a generated one, distinguished only by `source: 'uploaded'`.
  */
-deckRouter.post("/:companyId/upload", upload.single("deck"), async (req, res) => {
+/** Checks the file's real signature, not just the browser-supplied MIME type. */
+export function hasExpectedSignature(filePath: string, type: string): boolean {
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const header = Buffer.alloc(5);
+    fs.readSync(fd, header, 0, 5, 0);
+    if (type === "pdf") return header.toString("latin1") === "%PDF-";
+    if (type === "pptx") return header[0] === 0x50 && header[1] === 0x4b; // ZIP container ("PK")
+    return false;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function singleDeckUpload(req: any, res: any, next: any) {
+  upload.single("deck")(req, res, (err: any) => {
+    if (!err) return next();
+    const message = err?.code === "LIMIT_FILE_SIZE" ? "Deck files must be 25 MB or smaller." : err?.message || "Upload failed.";
+    res.status(400).json({ error: message });
+  });
+}
+
+deckRouter.post("/:companyId/upload", singleDeckUpload, async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No file uploaded. Field name must be 'deck'." });
 
   const userId = req.auth!.userId;
@@ -52,7 +75,11 @@ deckRouter.post("/:companyId/upload", upload.single("deck"), async (req, res) =>
     return res.status(404).json({ error: "Company not found." });
   }
 
-  const fileType = ALLOWED_DECK_TYPES[req.file.mimetype];
+  const fileType = ALLOWED_DECK_TYPES[req.file.mimetype]!;
+  if (!hasExpectedSignature(req.file.path, fileType)) {
+    fs.unlinkSync(req.file.path);
+    return res.status(400).json({ error: "That file isn't a valid PDF or PPTX." });
+  }
   const versionResult = await pool.query(
     "SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM decks WHERE company_id = $1",
     [req.params.companyId]
@@ -78,7 +105,8 @@ deckRouter.get("/file/:deckId", async (req, res) => {
   if (!deck || deck.source !== "uploaded" || !deck.uploaded_file_path) {
     return res.status(404).json({ error: "No uploaded file for this deck." });
   }
-  res.sendFile(deck.uploaded_file_path);
+  // Served as a download so a crafted file can never render inline on the API origin.
+  res.download(deck.uploaded_file_path, deck.uploaded_file_name || `deck.${deck.uploaded_file_type || "pdf"}`);
 });
 
 
@@ -97,6 +125,15 @@ deckRouter.post("/:companyId/generate", async (req, res) => {
   }
 
   const userId = req.auth!.userId;
+  // The Free plan is "upload your own deck"; AI-guided deck creation starts at Starter.
+  const entitlement = await loadEntitlement(userId);
+  if (entitlement.tier === "FREE") {
+    return res.status(402).json({
+      error: "AI deck generation is included from the Starter plan. Upload your own deck (PPTX or PDF), or upgrade.",
+      upgradeRequired: true,
+      generationDisabled: true,
+    });
+  }
   const companyResult = await pool.query("SELECT * FROM companies WHERE id = $1 AND user_id = $2", [
     req.params.companyId,
     userId,
@@ -152,8 +189,13 @@ deckRouter.post("/:companyId/generate", async (req, res) => {
 });
 
 /** Lets the frontend know whether to show "Generate" or "Upload" as the primary deck flow. */
-deckRouter.get("/config/status", (_req, res) => {
-  res.json({ generationAvailable: isAIFeatureAvailable("deck") });
+deckRouter.get("/config/status", async (req, res) => {
+  const entitlement = await loadEntitlement(req.auth!.userId);
+  res.json({
+    generationAvailable: isAIFeatureAvailable("deck") && entitlement.tier !== "FREE",
+    generationConfigured: isAIFeatureAvailable("deck"),
+    planAllowsGeneration: entitlement.tier !== "FREE",
+  });
 });
 
 deckRouter.get("/:companyId", async (req, res) => {
