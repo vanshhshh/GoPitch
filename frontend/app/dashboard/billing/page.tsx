@@ -1,8 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import toast from "react-hot-toast";
+import { CalendarClock, CheckCircle2, Receipt } from "lucide-react";
 import { api, ApiError, errorMessage } from "@/lib/api";
+import { EmptyState, ErrorState, LoadingSkeleton, Notice, Page, PageHeader, ProgressBar, Spinner } from "@/components/ui";
 import { EnterpriseEnquiryModal } from "@/components/EnterpriseEnquiryModal";
 import { PlanCard, Tier } from "@/components/PlanCard";
 
@@ -178,81 +181,136 @@ export default function BillingPage() {
 
   if (loadError) {
     return (
-      <div className="max-w-4xl mx-auto px-4 sm:px-8 py-10">
-        <p className="text-sm text-danger mb-3">{loadError}</p>
-        <button className="btn-secondary" onClick={refresh}>
-          Retry
-        </button>
-      </div>
+      <Page width="page">
+        <PageHeader title="Billing" />
+        <ErrorState message={loadError} onRetry={refresh} />
+      </Page>
     );
   }
 
   const current = subscription?.entitlementTier ?? "FREE";
   const currentTier = tiers?.find((t) => t.id === current);
-  const periodEnd = subscription?.currentPeriodEnd ? new Date(subscription.currentPeriodEnd).toLocaleDateString() : null;
+  const periodEnd = subscription?.currentPeriodEnd ? formatDate(subscription.currentPeriodEnd) : null;
+  const usedPct = quota && quota.investorEmailsTotal > 0 ? ((quota.investorEmailsSent + quota.investorEmailsQueued) / quota.investorEmailsTotal) * 100 : 0;
+
+  let planStatus: { text: string; cls: string } | null = null;
+  if (subscription) {
+    if (current === "FREE") planStatus = subscription.lapsed ? { text: "Lapsed", cls: "bg-signal-soft text-signal" } : null;
+    else if (subscription.billing === "one_time") planStatus = { text: "Lifetime", cls: "bg-verified-soft text-verified" };
+    else if (subscription.cancelAtPeriodEnd) planStatus = { text: "Ending", cls: "bg-signal-soft text-signal" };
+    else planStatus = { text: "Active", cls: "bg-verified-soft text-verified" };
+  }
 
   return (
-    <div className="max-w-5xl mx-auto px-4 sm:px-8 py-10">
-      <h1 className="font-display text-2xl mb-1">Billing</h1>
+    <Page width="page">
+      <PageHeader title="Billing" description="Manage your plan, track how many outreach emails you have left, and review past payments." />
 
-      {subscription && (
-        <div className="card p-5 mb-8 mt-4">
-          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-            <div>
-              <p className="label mb-1">Current plan</p>
-              <p className="font-display text-xl">{currentTier?.name ?? current}</p>
-              <p className="text-sm text-ink-soft mt-1">
-                {current === "FREE"
-                  ? subscription.lapsed
-                    ? "Your previous paid plan has ended, so your account is on Free."
-                    : "Free plan — no payment needed."
-                  : subscription.billing === "one_time"
-                    ? "One-time purchase — doesn't renew or expire."
-                    : subscription.cancelAtPeriodEnd
-                      ? `Ends on ${periodEnd}. It won't renew.`
-                      : `Active until ${periodEnd}. Renew any time before then to extend by 30 days.`}
-              </p>
-            </div>
-            {quota && (
-              <div className="sm:text-right">
-                <p className="label mb-1">Emails in this plan</p>
-                <p className="font-mono text-lg">
-                  {quota.investorEmailsRemaining} <span className="text-ink-soft text-sm">left of {quota.investorEmailsTotal}</span>
-                </p>
-                <p className="text-xs text-ink-soft">
-                  {quota.investorEmailsSent} sent · {quota.investorEmailsQueued} queued
-                </p>
+      {subscription === null ? (
+        <div className="mb-10">
+          <LoadingSkeleton rows={1} label="Loading your plan" />
+        </div>
+      ) : (
+        <section aria-label="Current plan" className="card overflow-hidden mb-10">
+          <div className="grid md:grid-cols-[1.2fr_1fr]">
+            <div className="p-5 sm:p-6">
+              <p className="label mb-2">Current plan</p>
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <h2 className="font-display text-2xl">{currentTier?.name ?? current}</h2>
+                {planStatus && <span className={`text-[10px] uppercase tracking-wide font-medium px-2 py-0.5 rounded ${planStatus.cls}`}>{planStatus.text}</span>}
               </div>
-            )}
-          </div>
-          {quota?.quotaExhausted && <p className="text-sm text-danger mt-4">You've used every email in your plan. Choose a plan below to keep sending.</p>}
-          {activating && <p className="text-sm text-signal mt-4">Confirming your payment with Razorpay…</p>}
-          {subscription.isPaidActive && subscription.billing === "monthly" && !subscription.cancelAtPeriodEnd && (
-            <div className="mt-4 pt-4 border-t border-line-soft">
-              {confirmCancel ? (
-                <div className="flex flex-wrap items-center gap-2 text-sm">
-                  <span>Stop renewal? You keep {currentTier?.name} until {periodEnd}.</span>
-                  <button className="btn-secondary text-xs text-danger" onClick={handleCancel}>
-                    Yes, cancel renewal
-                  </button>
-                  <button className="text-xs text-ink-soft hover:text-ink" onClick={() => setConfirmCancel(false)}>
-                    Keep plan
-                  </button>
+              <p className="text-sm text-ink-soft mt-2 flex items-start gap-2">
+                <CalendarClock size={15} className="mt-0.5 shrink-0" aria-hidden />
+                <span>
+                  {current === "FREE"
+                    ? subscription.lapsed
+                      ? "Your previous paid plan has ended, so your account is on Free."
+                      : "Free plan. No payment needed."
+                    : subscription.billing === "one_time"
+                      ? "One-time purchase. It doesn't renew or expire."
+                      : subscription.cancelAtPeriodEnd
+                        ? `Ends on ${periodEnd}. It won't renew.`
+                        : `Active until ${periodEnd}. Renew any time before then to add another 30 days.`}
+                </span>
+              </p>
+
+              {subscription.isPaidActive && subscription.billing === "monthly" && !subscription.cancelAtPeriodEnd && (
+                <div className="mt-5">
+                  {confirmCancel ? (
+                    <div className="rounded border border-danger/20 bg-danger-soft/50 p-3 text-sm">
+                      <p className="text-ink">
+                        Stop renewal? You keep {currentTier?.name} until {periodEnd}, then your account moves to Free.
+                      </p>
+                      <div className="flex flex-wrap gap-2 mt-3">
+                        <button className="btn-danger text-xs" onClick={handleCancel}>
+                          Yes, cancel renewal
+                        </button>
+                        <button className="btn-ghost text-xs" onClick={() => setConfirmCancel(false)}>
+                          Keep plan
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button className="text-xs text-ink-soft hover:text-danger hover:underline underline-offset-2" onClick={() => setConfirmCancel(true)}>
+                      Cancel renewal
+                    </button>
+                  )}
                 </div>
+              )}
+            </div>
+
+            <div className="p-5 sm:p-6 bg-surface-muted border-t md:border-t-0 md:border-l border-line-soft">
+              <p className="label mb-2">Outreach emails</p>
+              {quota ? (
+                <>
+                  <p className="flex items-baseline gap-1.5">
+                    <span className={`font-mono text-3xl tracking-tight ${quota.quotaExhausted ? "text-danger" : "text-navy"}`}>
+                      {quota.investorEmailsRemaining.toLocaleString("en-IN")}
+                    </span>
+                    <span className="text-sm text-ink-soft">left of {quota.investorEmailsTotal.toLocaleString("en-IN")}</span>
+                  </p>
+                  <div className="mt-3">
+                    <ProgressBar value={usedPct} label="Outreach emails used" />
+                  </div>
+                  <p className="mt-3 text-xs text-ink-soft">
+                    <span className="font-mono text-ink">{quota.investorEmailsSent.toLocaleString("en-IN")}</span> sent ·{" "}
+                    <span className="font-mono text-ink">{quota.investorEmailsQueued.toLocaleString("en-IN")}</span> queued
+                  </p>
+                </>
               ) : (
-                <button className="text-xs text-ink-soft hover:text-danger" onClick={() => setConfirmCancel(true)}>
-                  Cancel renewal
-                </button>
+                <p className="text-sm text-ink-soft">Usage isn't available right now.</p>
+              )}
+            </div>
+          </div>
+
+          {(quota?.quotaExhausted || activating) && (
+            <div className="px-5 sm:px-6 py-4 space-y-2 border-t border-line-soft">
+              {quota?.quotaExhausted && <Notice tone="danger">You've used every email in your plan. Choose a plan below to keep sending.</Notice>}
+              {activating && (
+                <Notice tone="info">
+                  <Spinner label="Confirming your payment with Razorpay…" />
+                </Notice>
               )}
             </div>
           )}
-        </div>
+        </section>
       )}
 
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-1 mb-5">
+        <div>
+          <h2 className="font-display text-xl">{current === "FREE" ? "Choose a plan" : "Plans"}</h2>
+          <p className="text-sm text-ink-soft mt-0.5">Prices in INR. Payments are processed securely by Razorpay.</p>
+        </div>
+        <Link href="/pricing" className="text-sm text-verified hover:underline">
+          See pricing FAQ
+        </Link>
+      </div>
+
       {tiers === null ? (
-        <p className="text-ink-soft text-sm">Loading…</p>
+        <div className="mb-12">
+          <LoadingSkeleton rows={2} label="Loading plans" />
+        </div>
       ) : (
-        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
+        <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4 pt-3 mb-12">
           {tiers.map((tier) => {
             const isCurrent = tier.id === current;
             const isLower = RANK[tier.id]! < RANK[current]!;
@@ -261,55 +319,107 @@ export default function BillingPage() {
               action = isCurrent ? (
                 <CurrentBadge />
               ) : (
-                <button type="button" onClick={() => setShowEnterprise(true)} className="btn-primary w-full text-sm">
+                <button type="button" onClick={() => setShowEnterprise(true)} className="btn-secondary w-full text-sm">
                   Talk to Sales
                 </button>
               );
             } else if (tier.id === "FREE") {
-              action = isCurrent ? <CurrentBadge /> : <p className="text-xs text-ink-soft text-center">Included with every account</p>;
+              action = isCurrent ? <CurrentBadge /> : <IncludedNote text="Included with every account" />;
             } else if (isLower) {
-              action = <p className="text-xs text-ink-soft text-center">Included in your plan</p>;
+              action = <IncludedNote text="Included in your plan" />;
             } else {
               const renew = isCurrent && tier.billing === "monthly";
               action =
                 isCurrent && !renew ? (
                   <CurrentBadge />
                 ) : (
-                  <button className="btn-primary w-full text-sm" onClick={() => handleCheckout(tier)} disabled={!!checkingOut || activating}>
+                  <button
+                    className={`${tier.id === "GROWTH" || renew ? "btn-primary" : "btn-secondary"} w-full text-sm`}
+                    onClick={() => handleCheckout(tier)}
+                    disabled={!!checkingOut || activating}
+                  >
                     {checkingOut === tier.id ? "Opening checkout…" : renew ? "Renew for 30 days" : `Upgrade to ${tier.name}`}
                   </button>
                 );
             }
-            return <PlanCard key={tier.id} tier={tier} highlight={isCurrent} action={action} compact />;
+            const recommend = !isCurrent && tier.id === "GROWTH" && RANK[current]! < RANK.GROWTH!;
+            return (
+              <PlanCard
+                key={tier.id}
+                tier={tier}
+                highlight={isCurrent}
+                badge={isCurrent ? "Your plan" : recommend ? "Recommended" : undefined}
+                action={action}
+                compact
+              />
+            );
           })}
         </div>
       )}
 
-      <h2 className="font-display text-lg mb-3">Payment history</h2>
+      <h2 className="font-display text-xl mb-4">Payment history</h2>
       {invoices === null ? (
-        <p className="text-ink-soft text-sm">Loading…</p>
+        <LoadingSkeleton rows={2} label="Loading payments" />
       ) : invoices.length === 0 ? (
-        <p className="text-ink-soft text-sm">No payments yet.</p>
+        <EmptyState icon={<Receipt size={18} />} title="No payments yet" description="When you buy or renew a plan, the payment will show up here." />
       ) : (
-        <div className="card divide-y divide-line-soft">
-          {invoices.map((inv) => (
-            <div key={inv.id} className="p-4 grid grid-cols-2 sm:grid-cols-4 gap-2 items-center text-sm">
-              <span>{tiers?.find((t) => t.id === inv.tier)?.name ?? inv.tier}</span>
-              <span className="font-mono sm:text-center">₹{inv.amountInr.toLocaleString("en-IN")}</span>
-              <span className="text-xs text-ink-soft">{new Date(inv.paidAt || inv.createdAt).toLocaleDateString()}</span>
-              <span className="sm:text-right" title={inv.failureReason ?? undefined}>
-                <span className={`text-[10px] uppercase px-2 py-0.5 rounded ${INVOICE_LABEL[inv.status]?.cls ?? ""}`}>{INVOICE_LABEL[inv.status]?.text ?? inv.status}</span>
-              </span>
-            </div>
-          ))}
+        <div className="card overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="hidden sm:table-header-group bg-surface-muted text-left">
+              <tr>
+                <th scope="col" className="label px-5 py-2.5">
+                  Plan
+                </th>
+                <th scope="col" className="label px-5 py-2.5">
+                  Date
+                </th>
+                <th scope="col" className="label px-5 py-2.5 text-right">
+                  Amount
+                </th>
+                <th scope="col" className="label px-5 py-2.5 text-right">
+                  Status
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line-soft">
+              {invoices.map((inv) => {
+                const status = INVOICE_LABEL[inv.status];
+                return (
+                  <tr key={inv.id} className="grid grid-cols-2 gap-x-2 gap-y-1 px-5 py-3 sm:table-row sm:p-0">
+                    <td className="font-medium text-navy sm:px-5 sm:py-3.5">{tiers?.find((t) => t.id === inv.tier)?.name ?? inv.tier}</td>
+                    <td className="text-xs text-ink-soft sm:text-sm sm:px-5 sm:py-3.5 order-3 sm:order-none">{formatDate(inv.paidAt || inv.createdAt)}</td>
+                    <td className="font-mono text-right sm:px-5 sm:py-3.5 order-2 sm:order-none">₹{inv.amountInr.toLocaleString("en-IN")}</td>
+                    <td className="text-right sm:px-5 sm:py-3.5 order-4 sm:order-none">
+                      <span className={`inline-block text-[10px] uppercase tracking-wide font-medium px-2 py-0.5 rounded ${status?.cls ?? "bg-line-soft text-ink-soft"}`}>
+                        {status?.text ?? inv.status}
+                      </span>
+                      {inv.status === "FAILED" && inv.failureReason && <p className="text-xs text-ink-soft mt-1 sm:max-w-[16rem] sm:ml-auto">{inv.failureReason}</p>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
 
       <EnterpriseEnquiryModal open={showEnterprise} onClose={() => setShowEnterprise(false)} source="billing" />
-    </div>
+    </Page>
   );
 }
 
+function formatDate(value: string) {
+  return new Date(value).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
+
 function CurrentBadge() {
-  return <span className="btn-secondary w-full text-sm block text-center cursor-default border-verified text-verified">Current plan</span>;
+  return (
+    <span className="w-full text-sm font-medium flex items-center justify-center gap-1.5 px-4 py-2 rounded bg-verified-soft text-verified cursor-default">
+      <CheckCircle2 size={14} aria-hidden /> Current plan
+    </span>
+  );
+}
+
+function IncludedNote({ text }: { text: string }) {
+  return <p className="text-xs text-ink-soft text-center px-4 py-2 rounded border border-dashed border-line">{text}</p>;
 }
